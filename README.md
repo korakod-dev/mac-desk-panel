@@ -198,10 +198,6 @@ on the desk is showing the time.
 
 Known and deliberately not done yet:
 
-- `wrapText()` measures with `substring()` per character — O(n²) allocations per
-  banner draw.
-- The CPU page's bar width is fixed, so a machine wider than about 12 logical
-  cores has the rest cut off rather than the bars narrowed.
 - No watchdog. A panel meant to stay up for weeks should have one.
 - `mac.screen` is fetched and unused, left from when the panel followed the
   Mac's own display.
