@@ -234,11 +234,23 @@ forecast rather than a hardcoded pair of hours. It never blanks: the hours the
 Mac is locked, asleep or shut in a clamshell are exactly the hours nothing else
 on the desk is showing the time.
 
+And it restarts itself if it wedges. The ESP32's task watchdog watches the loop
+task at a 30-second timeout — generous on purpose, because the longest thing
+loop() legitimately does is a weather fetch over WiFi, which blocks inside
+HTTPClient where there is no callback to feed from. A watchdog that trips on a
+slow morning is one that gets switched off. Requests over the USB link are fed
+throughout by the same idle hook that keeps the clock moving.
+
+The reason for the last restart is on the System page, in place of the clock
+speed, and only when there is something to say — a figure that always reads
+240 MHz is worth less than the one fact explaining why the uptime beside it just
+went back to zero. `panic = true`, so a trip also leaves a decoded backtrace on
+the serial console on its way out.
+
 ## Notes for later
 
 Known and deliberately not done yet:
 
-- No watchdog. A panel meant to stay up for weeks should have one.
 - `mac.screen` is fetched and unused, left from when the panel followed the
   Mac's own display.
 - The two servers bind `0.0.0.0` with no auth. Read-only, but it does put

@@ -38,6 +38,8 @@
 #include <TFT_eSPI.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
+#include <esp_system.h>
+#include <esp_task_wdt.h>
 #include <time.h>
 
 #include "layout.h"
@@ -56,6 +58,52 @@
 
 static const int16_t SCR_W = 320;   // landscape
 static const int16_t SCR_H = 170;
+
+// --- watchdog -----------------------------------------------------------------
+//
+// A panel meant to be read for weeks has to be able to come back from being
+// wedged, because the failure mode otherwise is noticing days later that the
+// clock stopped. The loop task is watched: the Arduino core feeds it once per
+// pass through loop(), and serviceWhileBlocked() feeds it during a fetch that
+// has not returned yet.
+//
+// Thirty seconds against a longest legitimate stall of about eight. Requests
+// over the USB link are fed every couple of milliseconds by the idle hook, so
+// they are not the constraint; a weather fetch over WiFi is. That one blocks
+// inside HTTPClient, which offers no callback to feed from, for as long as its
+// own timeout allows plus whatever DNS and the TLS handshake take.
+//
+// The margin is deliberate and the number is not a guess at the average. A
+// watchdog that trips on a slow morning is a watchdog that gets switched off,
+// and then it is not protecting anything. Recovering a hung panel in half a
+// minute rather than fifteen seconds costs nothing worth having.
+static const uint32_t WDT_TIMEOUT_S = 30;
+
+static esp_reset_reason_t bootReason = ESP_RST_UNKNOWN;
+
+static const char *resetName(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:   return "power";
+    case ESP_RST_EXT:       return "reset";
+    case ESP_RST_SW:        return "reflash";
+    case ESP_RST_PANIC:     return "crash";
+    case ESP_RST_INT_WDT:   return "int wdt";
+    case ESP_RST_TASK_WDT:  return "wdt";
+    case ESP_RST_WDT:       return "wdt";
+    case ESP_RST_BROWNOUT:  return "brownout";
+    case ESP_RST_DEEPSLEEP: return "sleep";
+    default:                return "unknown";
+  }
+}
+
+// Restarts the panel did not choose. Worth putting on the screen, because a
+// watchdog that quietly recovers the panel at four in the morning is one you
+// never learn anything from — the only other trace is an uptime that went back
+// to zero while nobody was looking.
+static bool bootWasAbnormal(esp_reset_reason_t r) {
+  return r == ESP_RST_PANIC || r == ESP_RST_INT_WDT || r == ESP_RST_TASK_WDT ||
+         r == ESP_RST_WDT   || r == ESP_RST_BROWNOUT;
+}
 
 static const int16_t BAR_TOP    = 20;          // status bar height
 static const int16_t BAR_BOTTOM = 18;          // hint bar height
@@ -1093,7 +1141,18 @@ static void pageSystem() {
   snprintf(up, sizeof(up), "%luh %02lum", (unsigned long)(s / 3600),
            (unsigned long)((s / 60) % 60));
   row(LX, CW, y, "Uptime", up, C_TEXT);
-  row(RX, CW, y, "CPU", String(getCpuFrequencyMhz()) + " MHz", C_TEXT);
+
+  // The clock speed gives way to why the panel last restarted, the same trade
+  // the weather page makes when it drops the place name for the reading's age:
+  // a figure that is always 240 MHz is worth less than the one fact that
+  // explains why the uptime beside it just went back to zero. It only appears
+  // when there is something to say, so the usual state of this page is the
+  // usual reading.
+  if (bootWasAbnormal(bootReason)) {
+    row(RX, CW, y, "Boot", resetName(bootReason), C_WARM);
+  } else {
+    row(RX, CW, y, "CPU", String(getCpuFrequencyMhz()) + " MHz", C_TEXT);
+  }
 
   fb.drawFastVLine(SCR_W / 2, BODY_TOP + 6, BODY_BOT - BODY_TOP - 12, C_BAR);
 }
@@ -1380,6 +1439,12 @@ static void serviceWhileBlocked() {
   if (btnNext.pressed()) pendingNext = true;
   if (btnAct.pressed())  pendingAct  = true;
 
+  // The core feeds the watchdog once per pass through loop(), and loop() has
+  // not returned: without this a fetch that takes longer than WDT_TIMEOUT_S
+  // would be indistinguishable from a hang and get the panel restarted for
+  // doing its job.
+  feedLoopWDT();
+
   updateBacklight();
 
   if (millis() - lastDraw >= 1000) {
@@ -1409,6 +1474,19 @@ void setup() {
   Serial.begin(115200);
   delay(300);
   Serial.println("\n=== T-Display-S3 dashboard (landscape) ===");
+
+  // Read before anything else can restart the panel, and kept for the system
+  // page. The TWDT is already running with the IDF's five-second default and
+  // nothing but the idle task subscribed; this widens it and puts the loop task
+  // under it. panic = true so a trip leaves a backtrace on the way out —
+  // monitor_filters has the decoder — rather than just a silent reboot.
+  bootReason = esp_reset_reason();
+  Serial.printf("[boot] last reset: %s\n", resetName(bootReason));
+
+  esp_task_wdt_init(WDT_TIMEOUT_S, true);
+  enableLoopWDT();
+  Serial.printf("[wdt] watching the loop task, %lus\n",
+                (unsigned long)WDT_TIMEOUT_S);
 
   tft.init();
   tft.setRotation(1);            // landscape, USB on the right
