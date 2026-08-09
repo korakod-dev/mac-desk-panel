@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Keeps tools/usage_server.py running so the panel has something to poll.
+
+  It runs a *copy* of usage_server.py, not the one in this repo. ~/Desktop is a
+  TCC-protected location and a launchd agent is not granted access to it, so an
+  agent pointed straight at tools/usage_server.py dies on startup with
+  "Operation not permitted". Install, and re-install after editing the server:
+
+      mkdir -p ~/Library/Application\ Support/claude-usage-server
+      cp tools/usage_server.py ~/Library/Application\ Support/claude-usage-server/
+      cp tools/com.korakod.claude-usage-server.plist ~/Library/LaunchAgents/
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.korakod.claude-usage-server.plist
+
+  Reload after replacing the script:
+
+      launchctl kickstart -k gui/$(id -u)/com.korakod.claude-usage-server
+
+  To remove:
+
+      launchctl bootout gui/$(id -u)/com.korakod.claude-usage-server
+      rm ~/Library/LaunchAgents/com.korakod.claude-usage-server.plist
+      rm -r ~/Library/Application\ Support/claude-usage-server
+
+  Runs on the system python — the server is stdlib only, so it does not need
+  the project's virtualenv and keeps working if .venv is rebuilt.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.korakod.claude-usage-server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/korakod/Library/Application Support/claude-usage-server/usage_server.py</string>
+        <string>8787</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-usage-server.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-usage-server.err</string>
+</dict>
+</plist>

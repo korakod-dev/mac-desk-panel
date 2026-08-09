@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Keeps tools/usb_net_bridge.py running so the panel has a network the moment
+  it is plugged in, with no WiFi and nothing to start by hand.
+
+  Like the usage-server agent, this runs a *copy* of the script rather than the
+  one in this repo: ~/Desktop is TCC-protected and a launchd agent pointed at it
+  dies on startup with "Operation not permitted".
+
+  Unlike the usage server, the bridge is not stdlib-only — it needs pyserial.
+  Installing it into the system python's user site rather than the project
+  virtualenv keeps the agent working when .venv is rebuilt:
+
+      /usr/bin/python3 -m pip install --user pyserial
+
+  Install, and re-install after editing the bridge:
+
+      mkdir -p ~/Library/Application\ Support/tdisplay-usb-bridge
+      cp tools/usb_net_bridge.py ~/Library/Application\ Support/tdisplay-usb-bridge/
+      cp tools/com.korakod.tdisplay-usb-bridge.plist ~/Library/LaunchAgents/
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.korakod.tdisplay-usb-bridge.plist
+
+  Reload after replacing the script:
+
+      launchctl kickstart -k gui/$(id -u)/com.korakod.tdisplay-usb-bridge
+
+  To remove:
+
+      launchctl bootout gui/$(id -u)/com.korakod.tdisplay-usb-bridge
+      rm ~/Library/LaunchAgents/com.korakod.tdisplay-usb-bridge.plist
+      rm -r ~/Library/Application\ Support/tdisplay-usb-bridge
+
+  Running unplugged is the normal state, not an error: the bridge looks for
+  /dev/cu.usbmodem* once a second and attaches whenever the board appears, so
+  KeepAlive only has to restart it if it actually dies.
+
+  --quiet keeps the log to bridge events only. Without it every line the panel
+  prints is echoed too, which is what you want while debugging and not what you
+  want in a file that is never rotated. Nothing is lost by leaving it on: the
+  console is still available on the passthrough port at 127.0.0.1:8788, which
+  is also how tools/grab_screen.py reaches the board while this is running.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.korakod.tdisplay-usb-bridge</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/korakod/Library/Application Support/tdisplay-usb-bridge/usb_net_bridge.py</string>
+        <string>--quiet</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/tdisplay-usb-bridge.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/tdisplay-usb-bridge.err</string>
+</dict>
+</plist>

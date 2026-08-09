@@ -1,0 +1,10 @@
+.pio/
+.venv/
+include/secrets.h
+src/fonts/*.vlw
+
+__pycache__/
+.DS_Store
+
+# Per-machine Claude Code permissions, not project configuration.
+.claude/settings.local.json

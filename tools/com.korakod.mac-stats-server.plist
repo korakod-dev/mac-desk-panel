@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Keeps tools/mac_stats_server.py running so the panel's Mac page has something
+  to poll.
+
+  Same shape as the usage-server agent, and for the same reason: it runs a
+  *copy* of the script, because ~/Desktop is TCC-protected and a launchd agent
+  pointed straight at it dies on startup with "Operation not permitted".
+
+  Install, and re-install after editing the server:
+
+      mkdir -p ~/Library/Application\ Support/mac-stats-server
+      cp tools/mac_stats_server.py ~/Library/Application\ Support/mac-stats-server/
+      cp tools/com.korakod.mac-stats-server.plist ~/Library/LaunchAgents/
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.korakod.mac-stats-server.plist
+
+  Reload after replacing the script:
+
+      launchctl kickstart -k gui/$(id -u)/com.korakod.mac-stats-server
+
+  To remove:
+
+      launchctl bootout gui/$(id -u)/com.korakod.mac-stats-server
+      rm ~/Library/LaunchAgents/com.korakod.mac-stats-server.plist
+      rm -r ~/Library/Application\ Support/mac-stats-server
+
+  Runs on the system python — stdlib only, so it needs neither the project
+  virtualenv nor the pyserial the USB bridge depends on.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.korakod.mac-stats-server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/korakod/Library/Application Support/mac-stats-server/mac_stats_server.py</string>
+        <string>8789</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/mac-stats-server.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/mac-stats-server.err</string>
+</dict>
+</plist>
