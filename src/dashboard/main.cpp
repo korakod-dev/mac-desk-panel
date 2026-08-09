@@ -368,7 +368,6 @@ struct MacStats {
   int      memUsed  = -1;      // percent
   int      diskFree = -1;      // GB
   int      diskUsed = -1;      // percent
-  String   screen;             // "on" / "locked" / "off"
   uint32_t up       = 0;       // seconds since the Mac booted
   int      age      = -1;      // snapshot age in seconds, as reported at `fetched`
   uint32_t fetched  = 0;
@@ -413,7 +412,6 @@ static bool fetchMac() {
   mac.memUsed  = doc["mem_used"]     | -1;
   mac.diskFree = doc["disk_free_gb"] | -1;
   mac.diskUsed = doc["disk_used"]    | -1;
-  mac.screen   = doc["screen"]       | "";
   mac.up       = doc["uptime_s"]     | 0;
   mac.age      = doc["age"]          | -1;
 
@@ -422,9 +420,9 @@ static bool fetchMac() {
   mac.valid   = mac.batPct >= 0 || mac.load1 >= 0 || mac.memUsed >= 0;
   mac.fetched = millis();
   mac.error   = mac.valid ? "" : "no reading";
-  Serial.printf("[mac] bat=%d%% %s load=%.2f mem=%d%% disk=%dGB screen=%s\n",
+  Serial.printf("[mac] bat=%d%% %s load=%.2f mem=%d%% disk=%dGB\n",
                 mac.batPct, mac.batState.c_str(), mac.load1, mac.memUsed,
-                mac.diskFree, mac.screen.c_str());
+                mac.diskFree);
   return mac.valid;
 }
 
@@ -1632,11 +1630,11 @@ void loop() {
     lastDraw = 0;
   }
 
-  // Polled harder than the reading itself needs, because two of the panel's
-  // automatic behaviours hang off it: the load average that picks the CPU page,
-  // and the screen state that decides whether to stay lit. Ten seconds is about
-  // how long a panel can stay dark after you unlock the Mac before it reads as
-  // broken. The host answers out of a two-second cache in tens of milliseconds.
+  // Polled harder than a battery percentage needs, because the load average
+  // rides along with it and that is what moves the panel to the CPU page. Ten
+  // seconds is about how far the page can lag the machine before arriving on it
+  // tells you about a minute ago. The host samples in the background, so asking
+  // costs a millisecond.
   if (online && (lastMac == 0 || millis() - lastMac > 10000UL)) {
     lastMac = millis();
     fetchMac();

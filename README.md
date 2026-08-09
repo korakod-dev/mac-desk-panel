@@ -251,7 +251,5 @@ the serial console on its way out.
 
 Known and deliberately not done yet:
 
-- `mac.screen` is fetched and unused, left from when the panel followed the
-  Mac's own display.
-- The two servers bind `0.0.0.0` with no auth. Read-only, but it does put
-  "screen: locked" on the subnet.
+- The two servers bind `0.0.0.0` with no auth. Read-only, and nothing on them
+  is very interesting, but it is on the subnet.

@@ -6,7 +6,7 @@ bridge when one is running, over the LAN otherwise:
 
     GET /mac  ->  {"bat_pct": 65, "bat_state": "discharging", "bat_mins": 481,
                    "load1": 2.85, "ncpu": 11, "mem_used": 30,
-                   "disk_free_gb": 179, "disk_used": 60, "screen": "on",
+                   "disk_free_gb": 179, "disk_used": 60,
                    "uptime_s": 219043, "age": 2, "now": 1786243278}
 
     GET /cpu  ->  {"cores": [12, 3, 45, ...], "avg": 27,
@@ -52,7 +52,7 @@ from urllib.parse import parse_qs
 
 RUN_TIMEOUT = 3.0        # a stat tool that hangs must not hang the panel
 SAMPLE_INTERVAL = 1.0    # per-core sampling period, and so the panel's ceiling
-STATS_FAST = 5.0         # resample load, memory and screen state this often
+STATS_FAST = 5.0         # resample load and memory this often
 STATS_SLOW = 30.0        # battery, disk and uptime, which move slower
 
 
@@ -160,41 +160,6 @@ def disk():
         return {"disk_free_gb": -1, "disk_used": -1}
 
     return {"disk_free_gb": round(avail_kb / 1048576), "disk_used": used_pct}
-
-
-def screen():
-    """Whether this Mac's own display is showing anything, and to whom.
-
-        "on"      someone is presumably sitting in front of it
-        "locked"  the screen is locked
-        "off"     the display has gone to sleep
-
-    The panel uses it to decide whether to stay lit, so an unreadable answer
-    reports "on": a display that goes dark because a stat tool changed its
-    output format is a worse failure than one that stays bright.
-
-    Both readings are indirect because the direct ones are out of reach — the
-    session dictionary lives behind a private framework, and pyobjc is not on
-    the system python this runs on. What is reachable:
-
-      CGSSessionScreenIsLocked appears in the console session's IORegistry
-      properties only while the screen is locked, and
-
-      the system capability set drops Graphics when the display sleeps.
-    """
-    users = run("ioreg", "-n", "Root", "-d1", "-a")
-    # Matched with its value rather than by presence: the key is absent
-    # entirely while unlocked here, but reporting a screen locked because some
-    # macOS version writes it out as <false/> would blank the panel all day.
-    if users and re.search(r"CGSSessionScreenIsLocked</key>\s*<true/>", users):
-        return {"screen": "locked"}
-
-    state = run("pmset", "-g", "systemstate")
-    if state and "System Capabilities" in state:
-        caps = state.split("\n")[0]
-        return {"screen": "on" if "Graphics" in caps else "off"}
-
-    return {"screen": "on"}
 
 
 def uptime():
@@ -405,7 +370,8 @@ def parse_body(body, ctype):
 # --- assembly ----------------------------------------------------------------
 #
 # Sampled in the background rather than per request, for the reason sample_cpu()
-# is: a request should cost a dict lookup, not six process spawns and a wait.
+# is: a request should cost a dict lookup, not a handful of process spawns and a
+# wait.
 #
 # It used to be a two-second cache in front of the readings, which sounds like
 # the same thing and is not — the panel polls every ten seconds, so every single
@@ -418,17 +384,16 @@ def parse_body(body, ctype):
 # show you that it has.
 #
 # Split in two because the cost is per spawn and the readings do not move at the
-# same speed: load, memory and screen state drive the panel's automatic page and
-# are worth five seconds, while a battery percentage or a disk figure is the
-# same number half a minute later. Together they cost about what the old
-# poll-driven cache did, just no longer on the request path.
+# same speed: the load average drives the panel's automatic page and is worth
+# five seconds, while a battery percentage or a disk figure is the same number
+# half a minute later.
 
-FAST_READINGS = (cpu, memory, screen)
+FAST_READINGS = (cpu, memory)
 SLOW_READINGS = (battery, disk, uptime)
 
 UNKNOWN = {"bat_pct": -1, "bat_state": "", "bat_mins": -1, "load1": -1,
            "ncpu": -1, "mem_used": -1, "disk_free_gb": -1, "disk_used": -1,
-           "screen": "", "uptime_s": -1}
+           "uptime_s": -1}
 
 _stats = {"data": None, "at": 0.0}
 
