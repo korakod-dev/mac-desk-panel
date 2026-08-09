@@ -84,6 +84,12 @@ void beginBody() {
   } else if (rxSink && id == rxId) {
     rxKeep   = true;
     rxStatus = status;
+    // The body lands in 128-byte reads, and String grows by reallocating: a
+    // 4 KB reply would otherwise copy itself through some thirty allocations
+    // of ascending size, which is how a panel left up for weeks arrives at a
+    // heap too fragmented to hold the next one. The length is in the header,
+    // so the whole body can be one allocation.
+    rxSink->reserve(len);
   }
 
   rxNeed  = len;

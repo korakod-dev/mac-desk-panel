@@ -1534,7 +1534,7 @@ void loop() {
   // request per second is worth it to watch cores move, and pure waste to keep
   // up behind a page nobody is looking at. Leaving lastCpu untouched off-page
   // means coming back to it fetches immediately.
-  if (online && page == 4 && millis() - lastCpu > 1000UL) {
+  if (online && page == PAGE_CPU && millis() - lastCpu > 1000UL) {
     lastCpu = millis();
     fetchCpu();
     lastDraw = 0;
