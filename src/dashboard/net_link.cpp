@@ -30,6 +30,9 @@ const uint32_t TIME_TIMEOUT  = 1000;
 // refuse those outright rather than deliver half of one.
 const int      MAX_BODY      = 4096;
 
+// Must match TOKEN_HEADER in tools/mac_stats_server.py and usage_server.py.
+const char    *TOKEN_HEADER  = "X-Panel-Token";
+
 enum class Rx : uint8_t { Idle, Header, Body };
 
 Rx       rxState = Rx::Idle;
@@ -204,7 +207,8 @@ void sendPing() {
   Serial.printf("\n@REQ %u PING\n", pingId);
 }
 
-bool wifiGet(const String &url, String &out, String &err, uint32_t timeout) {
+bool wifiGet(const String &url, String &out, String &err, uint32_t timeout,
+             const char *token) {
   bool secure = url.startsWith("https:");
 
   WiFiClientSecure tls;
@@ -221,6 +225,7 @@ bool wifiGet(const String &url, String &out, String &err, uint32_t timeout) {
     return false;
   }
   http.setTimeout(timeout);
+  if (token && *token) http.addHeader(TOKEN_HEADER, token);
 
   int status = http.GET();
   if (status != HTTP_CODE_OK) {
@@ -283,7 +288,8 @@ const char *viaName() {
 
 bool online() { return via() != Via::None; }
 
-bool get(const String &url, String &out, String &err, uint32_t timeoutMs) {
+bool get(const String &url, String &out, String &err, uint32_t timeoutMs,
+         const char *token) {
   err = "";
   uint32_t timeout = timeoutMs ? timeoutMs : GET_TIMEOUT;
 
@@ -308,7 +314,9 @@ bool get(const String &url, String &out, String &err, uint32_t timeoutMs) {
     }
   }
 
-  if (WiFi.status() == WL_CONNECTED) return wifiGet(url, out, err, timeout);
+  if (WiFi.status() == WL_CONNECTED) {
+    return wifiGet(url, out, err, timeout, token);
+  }
 
   if (err.isEmpty()) err = "no link";
   return false;

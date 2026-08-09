@@ -22,7 +22,11 @@ that travels towards the screen rather than away from the Mac:
     GET  /notify  ->  {"id": 7, "msg": "build failed", "kind": "warn",
                        "ttl": 20, "age": 3}
 
-Posting is loopback-only; see do_POST.
+Requests from this machine — which is every request over the USB bridge, since
+the bridge fetches on the panel's behalf — are served as they always were.
+Requests from the LAN, which is the panel's WiFi fallback, must carry the token
+in an X-Panel-Token header; see "who may ask". Posting a notification stays
+loopback-only whatever the token says.
 
 Anything that could not be read comes back as -1 (or "" for the battery state)
 rather than being omitted, so the firmware renders "--" instead of a stale or
@@ -36,13 +40,17 @@ blocks its main loop, and a spawn is the slowest thing a busy Mac does. `age`
 says how old the snapshot is.
 
 Usage:
-    mac_stats_server.py [port]        default 8789, binds all interfaces
+    mac_stats_server.py [port]        default 8789; binds all interfaces, but see
+                                      "who may ask" for who is served
 """
 
 import ctypes
 import ctypes.util
+import hmac
 import json
+import os
 import re
+import secrets
 import subprocess
 import sys
 import threading
@@ -64,6 +72,57 @@ def run(*args):
     except (OSError, subprocess.SubprocessError):
         return None
     return out.stdout if out.returncode == 0 else None
+
+
+# --- who may ask -------------------------------------------------------------
+#
+# The panel arrives two ways. Over the USB bridge the fetch is made by the
+# bridge process on this machine, so it comes from loopback and is trusted the
+# way anything else running here is. Over WiFi it comes from the LAN — and so
+# could everything else on the network, which until now could read the banner
+# text along with the rest. That text names project directories and whatever
+# Claude stopped to ask about.
+#
+# So loopback stays open and anything else must carry the token. A shared
+# secret in a header over plain HTTP is not much against someone reading the
+# traffic and is not meant to be; it is against the network being able to
+# simply read the port.
+#
+# Duplicated in the other server rather than shared. Each is copied to
+# ~/Library/Application Support/ as one file by its launch agent, and staying
+# one self-contained stdlib-only file is worth twenty repeated lines.
+
+TOKEN_PATH = os.path.expanduser("~/.config/t-display-s3/token")
+TOKEN_HEADER = "X-Panel-Token"
+
+TOKEN = None
+
+
+def load_token():
+    """The shared secret, minted on first run. None if it cannot be stored."""
+    try:
+        with open(TOKEN_PATH) as f:
+            existing = f.read().strip()
+        if existing:
+            return existing
+    except OSError:
+        pass
+
+    fresh = secrets.token_hex(16)
+    try:
+        os.makedirs(os.path.dirname(TOKEN_PATH), exist_ok=True)
+        fd = os.open(TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(fresh + "\n")
+    except OSError as exc:
+        # Without a token there is no way to tell an allowed LAN request from
+        # any other, so they are all refused. Loopback is unaffected, which
+        # leaves the USB bridge — the path that matters — working.
+        print(f"cannot write {TOKEN_PATH}: {exc}", flush=True)
+        print("LAN requests will be refused; the USB bridge is unaffected",
+              flush=True)
+        return None
+    return fresh
 
 
 # --- individual readings -----------------------------------------------------
@@ -443,7 +502,20 @@ def read_stats():
 
 
 class Handler(BaseHTTPRequestHandler):
+    def loopback(self):
+        return self.client_address[0] in ("127.0.0.1", "::1")
+
+    def authorised(self):
+        if self.loopback():
+            return True
+        return bool(TOKEN) and hmac.compare_digest(
+            self.headers.get(TOKEN_HEADER, ""), TOKEN)
+
     def do_GET(self):
+        if not self.authorised():
+            self.send_error(403, "token required from off this machine")
+            return
+
         route = self.path.split("?")[0]
         if route in ("/mac", "/"):
             payload = read_stats()
@@ -462,11 +534,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
 
-        # Everything else here is read-only and harmless to serve to the subnet.
-        # This one puts words on a screen on someone's desk, so it is kept to
-        # this machine — the posters it exists for (shell hooks, launchd jobs,
-        # the panel's own bridge) all reach it over loopback anyway.
-        if self.client_address[0] not in ("127.0.0.1", "::1"):
+        # Reading now needs the token from off-machine, but posting stays
+        # loopback-only regardless: this one puts words on a screen on someone's
+        # desk, and the posters it exists for (shell hooks, launchd jobs, the
+        # panel's own bridge) all reach it over loopback anyway. No reason to
+        # let a shared secret that also travels over WiFi be enough for it.
+        if not self.loopback():
             self.send_error(403, "notify is loopback only")
             return
 
@@ -498,7 +571,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    global TOKEN
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8789
+
+    TOKEN = load_token()
+    if TOKEN:
+        # The value itself is deliberately not printed: stdout here is a log
+        # file in /tmp. Read it from the path when it is needed for secrets.h.
+        print(f"LAN requests need {TOKEN_HEADER}, from {TOKEN_PATH}", flush=True)
 
     # Both started before the socket so the first request has a reading behind
     # it rather than an empty one. /cpu cannot be waited for — it needs two

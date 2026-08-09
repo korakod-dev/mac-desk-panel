@@ -20,16 +20,70 @@ reported as 0% with no reset time — the same correction statusline.sh makes,
 kept here so the firmware doesn't have to duplicate the rule.
 
 Usage:
-    usage_server.py [port]        default 8787, binds all interfaces
+    usage_server.py [port]        default 8787; binds all interfaces, but see
+                                      "who may ask" for who is served
 """
 
+import hmac
 import json
 import os
+import secrets
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 CACHE = os.path.expanduser("~/.claude/statusline-usage.cache")
+
+
+# --- who may ask -------------------------------------------------------------
+#
+# The panel arrives two ways. Over the USB bridge the fetch is made by the
+# bridge process on this machine, so it comes from loopback and is trusted the
+# way anything else running here is. Over WiFi it comes from the LAN — and so
+# could everything else on the network, which until now could read the banner
+# text along with the rest. That text names project directories and whatever
+# Claude stopped to ask about.
+#
+# So loopback stays open and anything else must carry the token. A shared
+# secret in a header over plain HTTP is not much against someone reading the
+# traffic and is not meant to be; it is against the network being able to
+# simply read the port.
+#
+# Duplicated in the other server rather than shared. Each is copied to
+# ~/Library/Application Support/ as one file by its launch agent, and staying
+# one self-contained stdlib-only file is worth twenty repeated lines.
+
+TOKEN_PATH = os.path.expanduser("~/.config/t-display-s3/token")
+TOKEN_HEADER = "X-Panel-Token"
+
+TOKEN = None
+
+
+def load_token():
+    """The shared secret, minted on first run. None if it cannot be stored."""
+    try:
+        with open(TOKEN_PATH) as f:
+            existing = f.read().strip()
+        if existing:
+            return existing
+    except OSError:
+        pass
+
+    fresh = secrets.token_hex(16)
+    try:
+        os.makedirs(os.path.dirname(TOKEN_PATH), exist_ok=True)
+        fd = os.open(TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(fresh + "\n")
+    except OSError as exc:
+        # Without a token there is no way to tell an allowed LAN request from
+        # any other, so they are all refused. Loopback is unaffected, which
+        # leaves the USB bridge — the path that matters — working.
+        print(f"cannot write {TOKEN_PATH}: {exc}", flush=True)
+        print("LAN requests will be refused; the USB bridge is unaffected",
+              flush=True)
+        return None
+    return fresh
 
 
 def read_usage():
@@ -72,7 +126,17 @@ def read_usage():
 
 
 class Handler(BaseHTTPRequestHandler):
+    def authorised(self):
+        if self.client_address[0] in ("127.0.0.1", "::1"):
+            return True
+        return bool(TOKEN) and hmac.compare_digest(
+            self.headers.get(TOKEN_HEADER, ""), TOKEN)
+
     def do_GET(self):
+        if not self.authorised():
+            self.send_error(403, "token required from off this machine")
+            return
+
         if self.path.split("?")[0] not in ("/usage", "/"):
             self.send_error(404)
             return
@@ -92,7 +156,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    global TOKEN
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8787
+
+    TOKEN = load_token()
+    if TOKEN:
+        # Not the value: stdout here is a log file in /tmp. Read it from the
+        # path when it is needed for secrets.h.
+        print(f"LAN requests need {TOKEN_HEADER}, from {TOKEN_PATH}", flush=True)
+
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"serving {CACHE} on http://0.0.0.0:{port}/usage", flush=True)
     try:

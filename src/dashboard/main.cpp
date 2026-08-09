@@ -331,7 +331,7 @@ static bool fetchUsage() {
 
   String payload;
   if (!net::get(hostUrl(USAGE_PORT, "/usage"), payload, usage.error,
-                HOST_TIMEOUT)) {
+                HOST_TIMEOUT, HOST_TOKEN)) {
     return false;
   }
 
@@ -393,7 +393,8 @@ static bool fetchMac() {
   }
 
   String payload;
-  if (!net::get(hostUrl(MAC_PORT, "/mac"), payload, mac.error, HOST_TIMEOUT)) {
+  if (!net::get(hostUrl(MAC_PORT, "/mac"), payload, mac.error, HOST_TIMEOUT,
+                HOST_TOKEN)) {
     return false;
   }
 
@@ -453,7 +454,8 @@ static bool fetchCpu() {
   }
 
   String payload;
-  if (!net::get(hostUrl(MAC_PORT, "/cpu"), payload, cpu.error, HOST_TIMEOUT)) {
+  if (!net::get(hostUrl(MAC_PORT, "/cpu"), payload, cpu.error, HOST_TIMEOUT,
+                HOST_TOKEN)) {
     return false;
   }
 
@@ -517,7 +519,8 @@ static bool fetchNotify() {
   if (!net::online()) return false;
 
   String payload, err;
-  if (!net::get(hostUrl(MAC_PORT, "/notify"), payload, err, HOST_TIMEOUT)) {
+  if (!net::get(hostUrl(MAC_PORT, "/notify"), payload, err, HOST_TIMEOUT,
+                HOST_TOKEN)) {
     return false;
   }
 

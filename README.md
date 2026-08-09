@@ -97,6 +97,28 @@ each script and carry their own install instructions in a comment at the top.
 The two servers run on the **system** python on purpose — stdlib only, so they
 keep working when the project venv is rebuilt or deleted.
 
+### Who they answer
+
+Both bind all interfaces, because the panel's WiFi fallback needs to reach them
+from the LAN. What that used to mean is that anything else on the network could
+read them too — including `/notify`, whose text names project directories and
+whatever Claude stopped to ask about.
+
+So requests from **this machine** are served as they always were, which covers
+every request over the USB bridge: the bridge does the fetching, so it arrives
+from loopback. Requests from **the LAN** must carry `X-Panel-Token`. Posting a
+notification stays loopback-only regardless.
+
+The token is minted on first run and kept at `~/.config/t-display-s3/token`,
+mode 0600, outside the repo. Copy it into `secrets.h` as `HOST_TOKEN` to let the
+WiFi fallback work; leave the placeholder and the panel simply runs on the cable
+alone. Clock and weather are unaffected either way — neither touches your
+machine.
+
+It is a shared secret over plain HTTP, so it is no defence against someone
+reading the traffic, and is not meant to be. It stops the network being able to
+just read the port.
+
 They each run a *copy* of their script, from `~/Library/Application Support/`,
 because `~/Desktop` is TCC-protected and a launch agent pointed straight at it
 dies on startup with "Operation not permitted". **After editing a server, copy
@@ -249,7 +271,13 @@ the serial console on its way out.
 
 ## Notes for later
 
-Known and deliberately not done yet:
+Nothing outstanding. Things worth knowing about the shape of it:
 
-- The two servers bind `0.0.0.0` with no auth. Read-only, and nothing on them
-  is very interesting, but it is on the subnet.
+- The LAN token is a shared secret over plain HTTP. It keeps the network from
+  reading the ports; it would not survive someone watching the traffic. TLS
+  would mean a certificate to mint and renew for a device with no clock at
+  boot, which is a worse trade for what is on the wire.
+- `net_link`'s idle hook only covers the USB path. A fetch over WiFi blocks
+  inside HTTPClient, which offers no callback, so the clock does stop for the
+  length of a slow weather fetch on the radio. The watchdog timeout is sized
+  around exactly that.

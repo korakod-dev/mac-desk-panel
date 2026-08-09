@@ -39,7 +39,15 @@ bool        online();
 // worth passing: the default is sized for a weather fetch the host has to do
 // DNS and TLS for, and spending that on a service running on the host itself is
 // how a dead bridge turns into eight seconds of frozen panel.
-bool get(const String &url, String &out, String &err, uint32_t timeoutMs = 0);
+//
+// `token`, when given, is sent as X-Panel-Token — and only over WiFi, which is
+// the only path that needs it. A request over the bridge is made by the bridge
+// itself and arrives at the servers from loopback, which they trust; a request
+// over the radio arrives from the LAN, which they no longer do. Pass it only
+// for the host's own services: sending it to Open-Meteo would hand a third
+// party a secret for nothing.
+bool get(const String &url, String &out, String &err, uint32_t timeoutMs = 0,
+         const char *token = nullptr);
 
 // Wall clock from the bridge, for when there is no WiFi to reach NTP over.
 bool syncTimeFromHost();
