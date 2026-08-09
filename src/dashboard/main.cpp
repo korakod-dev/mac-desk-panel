@@ -40,6 +40,7 @@
 #include <ArduinoJson.h>
 #include <time.h>
 
+#include "layout.h"
 #include "net_link.h"
 #include "secrets.h"
 #include "../fonts/ui16.h"
@@ -749,112 +750,9 @@ static void drawHintBar(const char *left, const char *right) {
 
 // --- the notification banner -------------------------------------------------
 
-// Greedy word wrap into at most maxLines lines of w pixels, measured in the
-// font currently loaded. Returns the lines written, and sets `cut` when the
-// text did not all fit — whatever was left over is marked on the last line, so
-// a message loses its tail visibly rather than spilling off the panel
-// unannounced.
-//
-// Measured a word at a time into a char buffer. It used to ask the width of
-// text.substring(pos, i + 1) for every i, which is a heap allocation and a
-// fresh measurement of the whole prefix per character: quadratic, and a few
-// hundred Strings churned per banner draw on a panel that redraws every second.
-// A word boundary is the only place a greedy wrap can break anyway, so the
-// character loop was measuring positions it could never use.
-//
-// The widths cannot simply be summed per character to avoid this. TFT_eSPI
-// corrects the left bearing of the first glyph and ends on the last glyph's ink
-// extent rather than its advance, so textWidth("ab") is not textWidth("a") plus
-// textWidth("b") — the string has to be measured as a string.
-//
-// Runs of spaces collapse to one, which the old version preserved. Nothing
-// notices: mac_stats_server already flattens whitespace before storing a
-// message, and a wrapped line has no use for the difference.
-static int wrapText(const String &text, int16_t w, int maxLines, String *out,
-                    bool *cut = nullptr) {
-  const int   n = (int)text.length();
-  const char *s = text.c_str();
-
-  char line[160];   // one rendered line; anything longer simply wraps again
-  int  used = 0;
-  int  pos  = 0;    // first character not yet placed
-
-  while (pos < n && used < maxLines) {
-    while (pos < n && s[pos] == ' ') pos++;
-    if (pos >= n) break;
-
-    int len   = 0;     // bytes committed to `line`
-    int next  = pos;   // where the following line starts
-    int probe = pos;
-
-    while (probe < n) {
-      int wordEnd = probe;
-      while (wordEnd < n && s[wordEnd] != ' ') wordEnd++;
-
-      const int sep = len ? 1 : 0;
-      const int add = wordEnd - probe;
-      if (len + sep + add + 1 > (int)sizeof(line)) break;
-
-      if (sep) line[len] = ' ';
-      memcpy(line + len + sep, s + probe, (size_t)add);
-      line[len + sep + add] = '\0';
-
-      if (fb.textWidth(line) > w) {
-        line[len] = '\0';   // that word overflowed: the line stands as it was
-        break;
-      }
-
-      len += sep + add;
-      next = wordEnd;
-      while (next < n && s[next] == ' ') next++;
-      probe = next;
-    }
-
-    // A single word wider than the line has no break point to find, so it gives
-    // up characters until it fits. Bounded by the width of a line and reached
-    // only by text with no spaces in it, which is why it can afford to measure
-    // per character where the loop above cannot.
-    if (len == 0) {
-      int wordEnd = pos;
-      while (wordEnd < n && s[wordEnd] != ' ') wordEnd++;
-      while (len < wordEnd - pos && len + 1 < (int)sizeof(line)) {
-        line[len]     = s[pos + len];
-        line[len + 1] = '\0';
-        if (fb.textWidth(line) > w) { line[len] = '\0'; break; }
-        len++;
-      }
-      if (len == 0) {   // not even one character fits; take it anyway
-        line[0] = s[pos];
-        line[1] = '\0';
-        len = 1;
-      }
-      next = pos + len;
-    }
-
-    out[used++] = line;
-    pos = next;
-    while (pos < n && s[pos] == ' ') pos++;
-  }
-
-  if (cut) *cut = pos < n;
-
-  if (pos < n && used > 0) {
-    // Mark the loss on the last line, in the buffer for the same reason.
-    String &last = out[used - 1];
-    int len = (int)last.length();
-    if (len > (int)sizeof(line) - 3) len = (int)sizeof(line) - 3;
-    memcpy(line, last.c_str(), (size_t)len);
-    for (;;) {
-      line[len]     = '.';
-      line[len + 1] = '.';
-      line[len + 2] = '\0';
-      if (len <= 1 || fb.textWidth(line) <= w) break;
-      len--;
-    }
-    last = line;
-  }
-  return used;
-}
+// The wrap itself lives in layout.h, shared with tests/layout_test.cpp. This is
+// the seam: the measurement it cannot do for itself, in whatever font is loaded.
+static int16_t measureText(const char *s) { return fb.textWidth(s); }
 
 static uint16_t notifyColor() {
   if (notify.kind == "alert") return C_ERR;
@@ -903,10 +801,10 @@ static void drawBanner() {
   String lines[3];
   bool cut = false;
   useFont(UiFont24);
-  int n = wrapText(notify.msg, tw, 2, lines, &cut);
+  int n = wrapText(notify.msg, tw, 2, lines, measureText, &cut);
   if (cut) {
     useFont(UiFont16);
-    n = wrapText(notify.msg, tw, 3, lines);
+    n = wrapText(notify.msg, tw, 3, lines, measureText);
   }
 
   const int16_t top = y + 30, avail = h - 36;
@@ -1360,24 +1258,15 @@ static void pageCpu() {
     fb.drawString(String(cpu.avg) + "%", SCR_W - 8, BODY_TOP + 10);
   }
 
-  // One column per core, plus one wider gap where the clusters meet.
-  //
-  // The width is derived rather than fixed. It used to be a flat 22px, chosen
-  // for the eleven cores of the Mac in front of it, and anything wider ran off
-  // the panel — the loop below cut the overflow off, so a sixteen-core machine
-  // drew twelve bars and silently dropped four. The columns narrow to fit
-  // whatever the host reports instead.
+  // One column per core, plus one wider gap where the clusters meet. The
+  // sizing is in layout.h, shared with the test that checks every core count
+  // from one to MAX_CORES still lands on the panel.
   const int16_t MARGIN = 4;
   const int16_t SPLIT  = split ? 10 : 0;
   const int16_t TOP = 48, BOT = 142, H = BOT - TOP;
 
-  // Gaps give way before bars do: past a dozen cores the separations would cost
-  // more of the panel than the things being separated.
-  const int16_t gap = cpu.n <= 12 ? 4 : cpu.n <= 20 ? 3 : 2;
-
-  int16_t bw = (SCR_W - 2 * MARGIN - SPLIT - (cpu.n - 1) * gap) / cpu.n;
-  if (bw > 22) bw = 22;   // and a four-core machine does not get slabs
-  if (bw < 2)  bw = 2;
+  const CpuBars bars = cpuBarLayout(cpu.n, SCR_W, MARGIN, SPLIT);
+  const int16_t bw = bars.bw, gap = bars.gap;
 
   // The unlit part of each column carries the cluster colour too, at a level
   // that stays behind the fill. Without it an idle Mac is a row of identical

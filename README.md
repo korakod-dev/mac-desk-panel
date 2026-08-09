@@ -181,6 +181,46 @@ to the bridge's passthrough socket instead. Uploads pause the bridge
 automatically — `pio_bridge_pause.py` is registered as a pre-upload hook in
 `platformio.ini`, so `pio run -t upload` just works with the bridge up.
 
+## Tests
+
+```bash
+./tests/run.sh
+```
+
+No board, no PlatformIO — just a C++17 compiler. It covers `layout.h`, which is
+where the two pieces of arithmetic worth being wrong about live: the banner's
+word wrap and the CPU page's column sizing.
+
+Two things make it worth having rather than decorative.
+
+It tests the **firmware's own code**. `layout.h` is templated on the string type
+and on the function that measures text, which are the only two things that
+cannot leave the device, so the test compiles the same header the panel does
+rather than a copy that quietly drifts.
+
+And it measures text with **TFT_eSPI's real algorithm over the real fonts** —
+`textWidth` transcribed from the library, reading metrics out of the generated
+`.vlw` files. That is not pedantry: the width of a string is not the sum of its
+characters' widths. The first glyph's negative left bearing is added back and
+the last contributes its ink extent rather than its advance, so a wrap checked
+against a simpler model passes on the host and overflows on the panel.
+
+What it asserts, over a corpus and 200,000 random inputs at the banner's real
+280px: no line exceeds its box, no line is empty or carries a stray space, the
+line count is respected, and the characters that come out are the characters
+that went in — entire when the text fitted, a prefix when it was cut, with the
+loss marked. Then that every core count from 1 to `MAX_CORES` lands on the panel
+in full, and that eleven cores still come out at the 22px this was built around.
+
+The suite has been checked against deliberate breakage — lines allowed to run
+over, bars pinned back to a fixed width, the truncation marker dropped, a
+character lost per word, a stray separator, an off-by-one on the line limit —
+and each is caught by a different assertion.
+
+The `.vlw` files are gitignored build byproducts; regenerate them with
+`make_vlw.py` before running the tests on a fresh clone. The test says so if
+they are missing.
+
 ## What the panel decides for itself
 
 It picks its own page: to the CPU page when the Mac's load passes three quarters
