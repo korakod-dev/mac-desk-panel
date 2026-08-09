@@ -7,7 +7,7 @@ bridge when one is running, over the LAN otherwise:
     GET /mac  ->  {"bat_pct": 65, "bat_state": "discharging", "bat_mins": 481,
                    "load1": 2.85, "ncpu": 11, "mem_used": 30,
                    "disk_free_gb": 179, "disk_used": 60, "screen": "on",
-                   "uptime_s": 219043, "now": 1786243278}
+                   "uptime_s": 219043, "age": 2, "now": 1786243278}
 
     GET /cpu  ->  {"cores": [12, 3, 45, ...], "avg": 27,
                    "ecores": 6, "pcores": 5, "age": 0}
@@ -30,8 +30,10 @@ invented number.
 
 Everything here shells out to stock macOS tools — no third-party dependency, so
 it runs on the system python and keeps working if the project venv is rebuilt.
-The readings are cached for a couple of seconds because the panel's fetch is
-blocking: a burst of polls should not turn into a burst of subprocesses.
+Every reading is taken by a background thread on a fixed period, so a request
+costs a dict lookup rather than a burst of process spawns; the panel's fetch
+blocks its main loop, and a spawn is the slowest thing a busy Mac does. `age`
+says how old the snapshot is.
 
 Usage:
     mac_stats_server.py [port]        default 8789, binds all interfaces
@@ -48,9 +50,10 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
-CACHE_TTL = 2.0          # seconds a reading stays good for
 RUN_TIMEOUT = 3.0        # a stat tool that hangs must not hang the panel
 SAMPLE_INTERVAL = 1.0    # per-core sampling period, and so the panel's ceiling
+STATS_FAST = 5.0         # resample load, memory and screen state this often
+STATS_SLOW = 30.0        # battery, disk and uptime, which move slower
 
 
 def run(*args):
@@ -400,25 +403,78 @@ def parse_body(body, ctype):
 
 
 # --- assembly ----------------------------------------------------------------
+#
+# Sampled in the background rather than per request, for the reason sample_cpu()
+# is: a request should cost a dict lookup, not six process spawns and a wait.
+#
+# It used to be a two-second cache in front of the readings, which sounds like
+# the same thing and is not — the panel polls every ten seconds, so every single
+# poll missed the cache and paid the full price. Idle that was 95 ms, which is
+# invisible. Measured again under a load average of 3 it was 1.2 to 2.0 seconds,
+# because the cost here is process spawns and those are what a busy machine is
+# slowest at. The panel's fetch blocks its main loop, so that landed as a
+# two-second freeze of the clock and the buttons, arriving reliably whenever the
+# Mac got busy — which is exactly when the panel switches to the CPU page to
+# show you that it has.
+#
+# Split in two because the cost is per spawn and the readings do not move at the
+# same speed: load, memory and screen state drive the panel's automatic page and
+# are worth five seconds, while a battery percentage or a disk figure is the
+# same number half a minute later. Together they cost about what the old
+# poll-driven cache did, just no longer on the request path.
+
+FAST_READINGS = (cpu, memory, screen)
+SLOW_READINGS = (battery, disk, uptime)
+
+UNKNOWN = {"bat_pct": -1, "bat_state": "", "bat_mins": -1, "load1": -1,
+           "ncpu": -1, "mem_used": -1, "disk_free_gb": -1, "disk_used": -1,
+           "screen": "", "uptime_s": -1}
+
+_stats = {"data": None, "at": 0.0}
 
 
-_cache = {"at": 0.0, "data": None}
+def sample_stats(ready=None):
+    """Refresh the vitals on a fixed period, forever.
+
+    `ready` is set once the first pass has landed, so startup can hold the
+    socket back until there is something real to serve.
+    """
+    last_slow = 0.0
+    while True:
+        now = time.time()
+        due = list(FAST_READINGS)
+        if now - last_slow >= STATS_SLOW:
+            due += SLOW_READINGS
+            last_slow = now
+
+        fresh = {}
+        for reading in due:
+            fresh.update(reading())
+
+        # Merged onto the last snapshot, so a fast pass keeps the slow group's
+        # values rather than blanking them for the twenty-five seconds until
+        # they are read again.
+        _stats["data"] = {**(_stats["data"] or UNKNOWN), **fresh}
+        _stats["at"] = now
+        if ready is not None:
+            ready.set()
+        time.sleep(STATS_FAST)
 
 
 def read_stats():
-    """Every reading as one dict, recomputed at most every CACHE_TTL seconds."""
+    """The latest snapshot, with how old it is.
+
+    `age` matters more than it looks: the readings now come from a thread, and a
+    thread can die in a way a request path cannot. Without it a panel polling a
+    dead sampler would show a battery percentage from last Tuesday and have no
+    way to know. The panel adds its own elapsed time to it, the same way it
+    already does for the usage window.
+    """
     now = time.time()
-    if _cache["data"] is not None and now - _cache["at"] < CACHE_TTL:
-        return _cache["data"]
+    if _stats["data"] is None:
+        return {**UNKNOWN, "age": -1, "now": int(now)}
 
-    stats = {}
-    for reading in (battery, cpu, memory, disk, screen, uptime):
-        stats.update(reading())
-    stats["now"] = int(now)
-
-    _cache["data"] = stats
-    _cache["at"] = now
-    return stats
+    return {**_stats["data"], "age": round(now - _stats["at"]), "now": int(now)}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -479,9 +535,21 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8789
 
-    # Started before the socket so the first /cpu request already has a window
-    # behind it rather than an empty list.
+    # Both started before the socket so the first request has a reading behind
+    # it rather than an empty one. /cpu cannot be waited for — it needs two
+    # tick samples to have a window to difference, so an early request there
+    # gets an empty list and the panel says so.
+    #
+    # /mac can be, and is: one pass is about 150 ms idle, but these are process
+    # spawns and a machine busy enough to be worth looking at took longer than
+    # three seconds to finish the first one. Serving before then answers a row
+    # of -1, which the panel faithfully renders as "no reading" — a restart of
+    # this agent should not put that on the screen for ten seconds.
+    ready = threading.Event()
     threading.Thread(target=sample_cpu, daemon=True).start()
+    threading.Thread(target=sample_stats, args=(ready,), daemon=True).start()
+    if not ready.wait(10.0):
+        print("first sample did not land in 10s; serving anyway", flush=True)
 
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"serving mac vitals on http://0.0.0.0:{port}/mac, /cpu and /notify",

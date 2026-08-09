@@ -225,6 +225,32 @@ static bool fetchWeather() {
   return true;
 }
 
+// --- the services on the host ------------------------------------------------
+//
+// Three pages and the notification banner are fed by the two servers on the
+// machine at the end of the cable. Where that machine is depends on how the
+// request travels: over USB it is the bridge's own host, named by an alias the
+// bridge resolves to loopback — the laptop moves between networks and its LAN
+// address is not something to depend on. Over WiFi there is no bridge, so it
+// has to be the address from secrets.h.
+//
+// Plain HTTP throughout: these serve a handful of numbers over a cable or the
+// same subnet, so TLS would only cost handshake time and a second certificate
+// path to keep working.
+static String hostUrl(int port, const char *path) {
+  String host = net::via() == net::Via::Usb ? String(USAGE_HOST_USB)
+                                            : String(USAGE_HOST);
+  return "http://" + host + ":" + String(port) + path;
+}
+
+// All four answer out of memory on the host, in single-digit milliseconds even
+// with the machine loaded enough to be worth looking at. The default timeout is
+// sized for a weather fetch the host has to do DNS and TLS for, and spending
+// eight seconds of frozen panel to discover the bridge has stopped answering is
+// the wrong trade. Two seconds rather than one because the host is sometimes
+// the busy machine the CPU page exists to show.
+static const uint32_t HOST_TIMEOUT = 2000;
+
 // --- Claude Code usage limits -----------------------------------------------
 
 struct Usage {
@@ -254,19 +280,11 @@ static bool fetchUsage() {
     return false;
   }
 
-  // Plain HTTP: the server serves two percentages, so TLS would only cost
-  // handshake time and a second certificate path.
-  //
-  // The host depends on how the request travels. Over USB it is the bridge's
-  // own machine, named by an alias the bridge resolves to loopback — the laptop
-  // moves between networks and its LAN address is not something to depend on.
-  // Over WiFi there is no bridge, so it has to be the address from secrets.h.
-  String host = net::via() == net::Via::Usb ? String(USAGE_HOST_USB)
-                                            : String(USAGE_HOST);
-  String url = "http://" + host + ":" + String(USAGE_PORT) + "/usage";
-
   String payload;
-  if (!net::get(url, payload, usage.error)) return false;
+  if (!net::get(hostUrl(USAGE_PORT, "/usage"), payload, usage.error,
+                HOST_TIMEOUT)) {
+    return false;
+  }
 
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, payload);
@@ -303,11 +321,22 @@ struct MacStats {
   int      diskUsed = -1;      // percent
   String   screen;             // "on" / "locked" / "off"
   uint32_t up       = 0;       // seconds since the Mac booted
+  int      age      = -1;      // snapshot age in seconds, as reported at `fetched`
   uint32_t fetched  = 0;
   String   error;
 };
 
 MacStats mac;
+
+// How stale the reading is *now*, the same sum usageAgeNow() makes and for a
+// sharper reason: the host samples these in a background thread, so a fetch
+// that answered in a millisecond can still be carrying a snapshot from minutes
+// ago if that thread has died. Without the server's own age the panel would
+// call it fresh, because its fetch was.
+static int macAgeNow() {
+  if (!mac.valid) return -1;
+  return (mac.age >= 0 ? mac.age : 0) + (int)((millis() - mac.fetched) / 1000);
+}
 
 static bool fetchMac() {
   if (!net::online()) {
@@ -315,14 +344,10 @@ static bool fetchMac() {
     return false;
   }
 
-  // Same host rule as the usage server: the alias over USB, the LAN address
-  // over WiFi. Both servers run on the machine at the end of the cable.
-  String host = net::via() == net::Via::Usb ? String(USAGE_HOST_USB)
-                                            : String(USAGE_HOST);
-  String url = "http://" + host + ":" + String(MAC_PORT) + "/mac";
-
   String payload;
-  if (!net::get(url, payload, mac.error)) return false;
+  if (!net::get(hostUrl(MAC_PORT, "/mac"), payload, mac.error, HOST_TIMEOUT)) {
+    return false;
+  }
 
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, payload);
@@ -341,6 +366,7 @@ static bool fetchMac() {
   mac.diskUsed = doc["disk_used"]    | -1;
   mac.screen   = doc["screen"]       | "";
   mac.up       = doc["uptime_s"]     | 0;
+  mac.age      = doc["age"]          | -1;
 
   // The server answers with every field present but unknown ones set to -1, so
   // a reply that carries nothing readable is a failure, not an empty machine.
@@ -376,12 +402,10 @@ static bool fetchCpu() {
     return false;
   }
 
-  String host = net::via() == net::Via::Usb ? String(USAGE_HOST_USB)
-                                            : String(USAGE_HOST);
-  String url = "http://" + host + ":" + String(MAC_PORT) + "/cpu";
-
   String payload;
-  if (!net::get(url, payload, cpu.error)) return false;
+  if (!net::get(hostUrl(MAC_PORT, "/cpu"), payload, cpu.error, HOST_TIMEOUT)) {
+    return false;
+  }
 
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, payload);
@@ -442,12 +466,10 @@ static const uint32_t NOTIFY_ALERT_MAX = 600;   // seconds
 static bool fetchNotify() {
   if (!net::online()) return false;
 
-  String host = net::via() == net::Via::Usb ? String(USAGE_HOST_USB)
-                                            : String(USAGE_HOST);
-  String url = "http://" + host + ":" + String(MAC_PORT) + "/notify";
-
   String payload, err;
-  if (!net::get(url, payload, err)) return false;
+  if (!net::get(hostUrl(MAC_PORT, "/notify"), payload, err, HOST_TIMEOUT)) {
+    return false;
+  }
 
   JsonDocument doc;
   if (deserializeJson(doc, payload)) return false;
@@ -1140,7 +1162,7 @@ static void pageMac() {
   // page, so the age has to be visible or a charge figure from hours ago reads
   // as current. Shown only once it is old enough to mislead — labelling a
   // fresh number "0s ago" every second is noise.
-  uint32_t age = (millis() - mac.fetched) / 1000;
+  int age = macAgeNow();
   if (age > 90) {
     fb.setTextDatum(ML_DATUM);
     fb.setTextColor(C_WARM, C_BG);
@@ -1314,6 +1336,11 @@ static void pageCpu() {
 
 // --- render -----------------------------------------------------------------
 
+// At file scope because the idle hook below redraws too. Both it and loop()
+// clear it to force a redraw on the next pass rather than waiting out the
+// second.
+static uint32_t lastDraw = 0;
+
 static void render() {
   time_t raw = time(nullptr);
   struct tm now;
@@ -1355,6 +1382,39 @@ static void dumpScreen() {
   Serial.flush();
   Serial.write((const uint8_t *)fb.getPointer(), (size_t)SCR_W * SCR_H * 2);
   Serial.flush();
+}
+
+// --- staying alive through a fetch -------------------------------------------
+//
+// A fetch blocks loop() until the host answers or the timeout runs out, and
+// nothing else runs in that window: the clock stops, a press goes unseen, and a
+// banner that arrived a moment ago sits undrawn. For the host's own services
+// that window is now milliseconds, but the weather still goes out to the
+// internet on the host's behalf and is allowed its eight seconds — and eight
+// seconds of a stopped clock is precisely how a working panel comes to look
+// like a crashed one.
+//
+// net_link calls this while it waits. It does the two things that must not
+// stop, and deliberately not the third: serial commands are left alone, because
+// draining them here would take bytes from the reader that is mid-request, and
+// a framebuffer dump would land in the middle of the response it is waiting on.
+
+static bool pendingNext = false, pendingAct = false;
+
+static void serviceWhileBlocked() {
+  // Latched rather than acted on. pressed() reports an edge exactly once, so
+  // consuming it here and doing nothing with it would turn a press during a
+  // fetch into a press that never happened — and the fetch is the very moment
+  // someone jabs the button, because the panel looks stuck.
+  if (btnNext.pressed()) pendingNext = true;
+  if (btnAct.pressed())  pendingAct  = true;
+
+  updateBacklight();
+
+  if (millis() - lastDraw >= 1000) {
+    lastDraw = millis();
+    render();
+  }
 }
 
 // --- setup / loop -----------------------------------------------------------
@@ -1410,19 +1470,24 @@ void setup() {
   // the epoch instead and this only decides how it is rendered.
   configTzTime(LOCAL_TZ, "pool.ntp.org", "time.google.com");
 
+  net::setIdleHook(serviceWhileBlocked);
   net::begin();
 }
 
 void loop() {
-  static uint32_t lastDraw = 0, lastWeather = 0, lastUsage = 0, lastMac = 0,
+  static uint32_t lastWeather = 0, lastUsage = 0, lastMac = 0,
                   lastCpu = 0, lastNotify = 0;
   static bool wasOnline = false;
 
   // Both are read every pass whatever happens to the result: pressed() debounces
   // against the level it saw last time, and a button that goes unpolled while a
   // banner is up would report the release as a press once it resumes.
-  bool nextPressed = btnNext.pressed();
-  bool actPressed  = btnAct.pressed();
+  //
+  // Either may also have been caught by the idle hook during a fetch. That
+  // press is picked up here rather than lost with the pass it landed in.
+  bool nextPressed = btnNext.pressed() || pendingNext;
+  bool actPressed  = btnAct.pressed()  || pendingAct;
+  pendingNext = pendingAct = false;
 
   // A banner is modal. The first press acknowledges it and does nothing else,
   // so clearing one never also flips the page or the backlight.

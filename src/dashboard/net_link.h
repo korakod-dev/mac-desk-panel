@@ -34,12 +34,25 @@ bool        online();
 
 // Blocking, with the same shape as the HTTPClient calls this replaces: true and
 // the body in `out`, or false and a short reason in `err`.
-bool get(const String &url, String &out, String &err);
+//
+// `timeoutMs` is how long to wait before giving up, 0 for the default. It is
+// worth passing: the default is sized for a weather fetch the host has to do
+// DNS and TLS for, and spending that on a service running on the host itself is
+// how a dead bridge turns into eight seconds of frozen panel.
+bool get(const String &url, String &out, String &err, uint32_t timeoutMs = 0);
 
 // Wall clock from the bridge, for when there is no WiFi to reach NTP over.
 bool syncTimeFromHost();
 
 // Console bytes the host typed, one at a time. -1 when the queue is empty.
 int readCommand();
+
+// Called repeatedly while a request is blocked waiting on the USB link, so the
+// panel keeps its clock and its buttons through a fetch instead of freezing for
+// the duration. It must not fetch anything itself — a nested request would take
+// the reader out from under the one already waiting — and requests made from
+// inside it fail immediately rather than being allowed to try.
+using IdleHook = void (*)();
+void setIdleHook(IdleHook fn);
 
 }  // namespace net

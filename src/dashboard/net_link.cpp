@@ -44,6 +44,9 @@ bool     rxDone   = false;
 uint16_t nextId = 1;
 uint16_t pingId = 0;
 
+net::IdleHook idleHook = nullptr;
+bool          inRequest = false;   // guards the single reader against nesting
+
 uint32_t lastPing = 0, lastUsbOk = 0;
 bool     usbUp = false;
 
@@ -147,6 +150,12 @@ void pump() {
 // cleared first, so a timeout leaves it empty rather than half-filled.
 bool request(const char *verb, const String &arg, uint32_t timeout, String &out,
              int &status) {
+  // There is one reader and one sink, so a request started from inside the idle
+  // hook of another would answer the wrong caller. The hook is documented not
+  // to fetch; this makes the mistake fail cleanly instead of subtly.
+  if (inRequest) return false;
+  inRequest = true;
+
   pump();  // drain anything left over before claiming the reader
 
   out      = "";
@@ -165,11 +174,18 @@ bool request(const char *verb, const String &arg, uint32_t timeout, String &out,
   uint32_t start = millis();
   while (!rxDone && millis() - start < timeout) {
     pump();
-    if (!rxDone) delay(2);
+    if (rxDone) break;
+    // The panel is otherwise dead for the whole of this wait. The hook redraws
+    // it and watches the buttons; pump() above keeps the reply draining, and
+    // the CDC queue was sized in setup() to hold a whole body, so a redraw
+    // landing mid-response costs latency rather than bytes.
+    if (idleHook) idleHook();
+    delay(2);
   }
 
   rxSink = nullptr;
   status = rxStatus;
+  inRequest = false;
 
   if (!rxDone) {
     usbUp = false;
@@ -188,14 +204,14 @@ void sendPing() {
   Serial.printf("\n@REQ %u PING\n", pingId);
 }
 
-bool wifiGet(const String &url, String &out, String &err) {
+bool wifiGet(const String &url, String &out, String &err, uint32_t timeout) {
   bool secure = url.startsWith("https:");
 
   WiFiClientSecure tls;
   WiFiClient plain;
   if (secure) {
     tls.setInsecure();  // public endpoints only; no cert pinning to maintain
-    tls.setTimeout(10);
+    tls.setTimeout(timeout / 1000);
   }
 
   HTTPClient http;
@@ -204,7 +220,7 @@ bool wifiGet(const String &url, String &out, String &err) {
     err = "WiFi: connect failed";
     return false;
   }
-  http.setTimeout(10000);
+  http.setTimeout(timeout);
 
   int status = http.GET();
   if (status != HTTP_CODE_OK) {
@@ -267,22 +283,32 @@ const char *viaName() {
 
 bool online() { return via() != Via::None; }
 
-bool get(const String &url, String &out, String &err) {
+bool get(const String &url, String &out, String &err, uint32_t timeoutMs) {
   err = "";
+  uint32_t timeout = timeoutMs ? timeoutMs : GET_TIMEOUT;
 
   if (usbUp) {
     int status = 0;
-    if (request("GET", url, GET_TIMEOUT, out, status)) {
+    if (request("GET", url, timeout, out, status)) {
       if (status == 200) return true;
       // The bridge puts its own diagnosis in the body when the fetch failed.
+      // That came back promptly, so trying the radio as well costs little and
+      // is a real second chance — the bridge's machine may be the thing that
+      // is down rather than the link to it.
       err = "USB: " + (out.length() ? out : "HTTP " + String(status));
       out = "";
     } else {
+      // A timeout is different, and falling through here used to spend the
+      // WiFi timeout straight after the USB one: eighteen seconds in one call,
+      // with loop() not running for any of it. request() has already dropped
+      // usbUp, so the next poll comes back and takes the radio from the start.
+      // One link, one wait.
       err = "USB: no answer";
+      return false;
     }
   }
 
-  if (WiFi.status() == WL_CONNECTED) return wifiGet(url, out, err);
+  if (WiFi.status() == WL_CONNECTED) return wifiGet(url, out, err, timeout);
 
   if (err.isEmpty()) err = "no link";
   return false;
@@ -303,6 +329,8 @@ bool syncTimeFromHost() {
   Serial.printf("[net] clock set from usb host: %ld\n", (long)epoch);
   return true;
 }
+
+void setIdleHook(IdleHook fn) { idleHook = fn; }
 
 int readCommand() {
   pump();
