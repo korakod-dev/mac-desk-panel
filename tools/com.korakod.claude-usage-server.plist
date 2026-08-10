@@ -5,6 +5,10 @@
   It runs a *copy* of usage_server.py, not the one in this repo. ~/Desktop is a
   TCC-protected location and a launchd agent is not granted access to it, so an
   agent pointed straight at tools/usage_server.py dies on startup with
+  The ProgramArguments path below is absolute, because launchd expands
+  neither ~ nor $HOME. Change the username in it to yours before
+  installing, or the agent starts and exits with nothing to run.
+
   "Operation not permitted". Install, and re-install after editing the server:
 
       mkdir -p ~/Library/Application\ Support/claude-usage-server

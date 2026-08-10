@@ -7,6 +7,10 @@
   *copy* of the script, because ~/Desktop is TCC-protected and a launchd agent
   pointed straight at it dies on startup with "Operation not permitted".
 
+  The ProgramArguments path below is absolute, because launchd expands
+  neither ~ nor $HOME. Change the username in it to yours before
+  installing, or the agent starts and exits with nothing to run.
+
   Install, and re-install after editing the server:
 
       mkdir -p ~/Library/Application\ Support/mac-stats-server
