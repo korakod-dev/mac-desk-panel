@@ -6,7 +6,7 @@ bridge when one is running, over the LAN otherwise:
 
     GET /mac  ->  {"bat_pct": 65, "bat_state": "discharging", "bat_mins": 481,
                    "load1": 2.85, "ncpu": 11, "mem_used": 30,
-                   "disk_free_gb": 179, "disk_used": 60,
+                   "disk_free_gb": 179, "disk_used": 60, "display": "external",
                    "uptime_s": 219043, "age": 2, "now": 1786243278}
 
     GET /cpu  ->  {"cores": [12, 3, 45, ...], "avg": 27,
@@ -127,6 +127,22 @@ def load_token():
 
 # --- individual readings -----------------------------------------------------
 
+# CoreGraphics, for display(). Loaded once and lazily: it is the only reading
+# that calls a framework rather than spawning a tool, and a machine where the
+# load fails should lose that one field rather than the server.
+MAX_DISPLAYS = 16
+
+_cg = None
+_cg_warned = False
+
+
+def _coregraphics():
+    global _cg
+    if _cg is None:
+        _cg = ctypes.CDLL(
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+    return _cg
+
 
 def battery():
     """Charge percentage, power state, and minutes left.
@@ -219,6 +235,73 @@ def disk():
         return {"disk_free_gb": -1, "disk_used": -1}
 
     return {"disk_free_gb": round(avail_kb / 1048576), "disk_used": used_pct}
+
+
+def display():
+    """Which screen the Mac is driving, as one word.
+
+    Rolls up two questions the panel could not answer before, because the same
+    call answers both: whether anything external is being driven, and whether
+    the screens are awake.
+
+        "external"  driving at least one display that is not the built-in one
+        "builtin"   the laptop's own screen only
+        "asleep"    awake, but every screen is off — locked, or idled out
+        "none"      no active display at all, which is rare and transient
+        ""          the call failed
+
+    Note what "asleep" is not: a Mac that is itself asleep does not answer this
+    request at all, because this process is not being scheduled to answer it.
+    So this field says the *screens* are off while the machine is still up. The
+    panel tells the other case apart by the link going quiet, which is why the
+    two readings are worth having side by side.
+
+    A closed lid is why "external" cannot be inferred from the count. In
+    clamshell the built-in display drops out of the list entirely, so a Mac
+    driving one external monitor reports exactly one display, the same count as
+    a laptop with the lid open and nothing plugged in. What separates them is
+    CGDisplayIsBuiltin, not how many came back.
+
+    The online list rather than the active one, which is the trap here and was
+    found by measuring rather than by reading: a display that goes to sleep
+    stops being *active* and leaves that list altogether. Built on the active
+    list this function answered "none" for a screen that had merely turned
+    itself off, which is the one state it exists to report, and CGDisplayIsAsleep
+    never got a display to be asked about. The online list keeps everything
+    physically attached and lets the sleep flag do its job.
+
+    The last attempt at a screen reading shelled out to `ioreg` and was dropped
+    for costing 25 ms of a 30 ms sampling pass. This is the same answer from
+    the framework that owns it, and asking costs nothing by comparison: the
+    three calls measure 31 microseconds and this whole function 88, some 280
+    times cheaper than the reading it replaces. That is what makes it
+    affordable on the fast pass, where nothing else avoids a process spawn.
+    """
+    try:
+        cg = _coregraphics()
+        ids = (ctypes.c_uint32 * MAX_DISPLAYS)()
+        count = ctypes.c_uint32()
+        if cg.CGGetOnlineDisplayList(MAX_DISPLAYS, ids, ctypes.byref(count)):
+            return {"display": ""}
+
+        online = [ids[i] for i in range(count.value)]
+        if not online:
+            return {"display": "none"}
+
+        awake = [d for d in online if not cg.CGDisplayIsAsleep(d)]
+        if not awake:
+            return {"display": "asleep"}
+
+        external = any(not cg.CGDisplayIsBuiltin(d) for d in awake)
+        return {"display": "external" if external else "builtin"}
+    except (OSError, AttributeError) as exc:
+        # A framework that will not load or has lost a symbol is worth saying
+        # once rather than every five seconds forever.
+        global _cg_warned
+        if not _cg_warned:
+            _cg_warned = True
+            print(f"display reading unavailable: {exc}", flush=True)
+        return {"display": ""}
 
 
 def uptime():
@@ -439,7 +522,7 @@ def parse_body(body, ctype):
 # because the cost here is process spawns and those are what a busy machine is
 # slowest at. The panel's fetch blocks its main loop, so that landed as a
 # two-second freeze of the clock and the buttons, arriving reliably whenever the
-# Mac got busy — which is exactly when the panel switches to the CPU page to
+# Mac got busy — which is exactly when the panel switches to the Mac page to
 # show you that it has.
 #
 # Split in two because the cost is per spawn and the readings do not move at the
@@ -447,12 +530,16 @@ def parse_body(body, ctype):
 # five seconds, while a battery percentage or a disk figure is the same number
 # half a minute later.
 
-FAST_READINGS = (cpu, memory)
+# display() is on the fast pass despite moving less often than the load average,
+# because it is the one reading here that costs no process spawn — the whole
+# argument for the two-speed split does not apply to it. Five seconds is then
+# just the slowest it can be behind a lid closing.
+FAST_READINGS = (cpu, memory, display)
 SLOW_READINGS = (battery, disk, uptime)
 
 UNKNOWN = {"bat_pct": -1, "bat_state": "", "bat_mins": -1, "load1": -1,
            "ncpu": -1, "mem_used": -1, "disk_free_gb": -1, "disk_used": -1,
-           "uptime_s": -1}
+           "uptime_s": -1, "display": ""}
 
 _stats = {"data": None, "at": 0.0}
 

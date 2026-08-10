@@ -223,7 +223,7 @@ int main() {
     // --- cpuBarLayout ---------------------------------------------------------
     //
     // The property that was broken: every core the host reports has to land on
-    // the panel. pageCpu draws bar i at x0 + i*(bw+gap), plus SPLIT once the
+    // the panel. pageMac draws bar i at x0 + i*(bw+gap), plus SPLIT once the
     // performance cluster starts, and skips any that would cross the margin.
 
     printf("cpuBarLayout\n");

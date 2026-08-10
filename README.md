@@ -13,13 +13,18 @@ there as a fallback, not a requirement.
 |---|---|
 | ![clock and weather](docs/pages/1-now.png) | ![Claude Code usage](docs/pages/2-usage.png) |
 | **now** — time, date, temperature, conditions | **usage** — the 5h and 7d windows, and when they roll |
-| ![panel vitals](docs/pages/3-system.png) | ![Mac vitals](docs/pages/4-mac.png) |
-| **system** — the panel's own link, memory, battery | **mac** — charge, load, memory, disk |
-| ![per-core CPU](docs/pages/5-cpu.png) | |
-| **cpu** — every logical core, E cluster then P | |
+| ![Mac vitals and cores](docs/pages/3-mac.png) | ![the panel's own vitals](docs/pages/4-vitals.png) |
+| **mac** — charge, screen, memory, disk, a column per core | **vitals** — not a page: hold `IO14` for the panel's own |
 
-`IO14` moves to the next page. `BOOT` refreshes the page's data where that means
-something, and toggles the backlight where it doesn't.
+`IO14` moves to the next page, and held, brings up the panel's own vitals over
+whatever is showing. `BOOT` refreshes the page in front of you, and held, dims
+or brightens the panel.
+
+The vitals are behind a hold rather than in the cycle because every figure on
+them answers "is this thing working" — a question you ask on purpose after
+noticing something wrong, never one you answer in a glance. As a page they cost
+a press on every trip round to skip past three constants and two fields that
+read `--` whenever the link is the cable.
 
 ## How the pieces fit
 
@@ -92,7 +97,7 @@ each script and carry their own install instructions in a comment at the top.
 |---|---|---|
 | `tools/usb_net_bridge.py` | 8788 | Answers the panel's requests over the cable. Needs pyserial; **replaces** `pio device monitor`, since it holds the port. |
 | `tools/usage_server.py` | 8787 | Serves the Claude Code 5h/7d limits. Stdlib only. |
-| `tools/mac_stats_server.py` | 8789 | Serves battery, load, memory, disk, per-core CPU, and the notification mailbox. Stdlib only. |
+| `tools/mac_stats_server.py` | 8789 | Serves battery, load, memory, disk, which screen is being driven, per-core CPU, and the notification mailbox. Stdlib only. |
 
 The two servers run on the **system** python on purpose — stdlib only, so they
 keep working when the project venv is rebuilt or deleted.
@@ -189,7 +194,7 @@ The firmware takes single-byte commands on the console, and
 of it — as a PNG:
 
 ```bash
-.venv/bin/python tools/grab_screen.py shot 5      # capture all five pages
+.venv/bin/python tools/grab_screen.py shot 3      # capture all three pages
 ```
 
 | | |
@@ -197,6 +202,10 @@ of it — as a PNG:
 | `N` | next page |
 | `S` | dump the framebuffer as raw RGB565 |
 | `A` | toggle automatic page selection |
+| `V` | toggle the vitals overlay |
+
+`V` exists because the overlay's own way in is a finger on a button, which is no
+use to a host trying to photograph it.
 
 While the bridge is running it owns the serial port, so `grab_screen.py` talks
 to the bridge's passthrough socket instead. Uploads pause the bridge
@@ -211,7 +220,7 @@ automatically — `pio_bridge_pause.py` is registered as a pre-upload hook in
 
 No board, no PlatformIO — just a C++17 compiler. It covers `layout.h`, which is
 where the two pieces of arithmetic worth being wrong about live: the banner's
-word wrap and the CPU page's column sizing.
+word wrap and the core columns' sizing.
 
 Two things make it worth having rather than decorative.
 
@@ -245,16 +254,30 @@ they are missing.
 
 ## What the panel decides for itself
 
-It picks its own page: to the CPU page when the Mac's load passes three quarters
-of its core count, to the usage page when a window goes over 85%. Any button
+It picks its own page: to the Mac page, where the core columns are, when that
+machine's load passes three quarters of its core count, and to the usage page
+when a window goes over 85%. Any button
 hands control back for two minutes; `A` turns it off entirely. The lit dot in
 the status bar says which mode it is in — cyan for automatic, warm while you
 have it, white when automatic is off.
 
-It also dims after sunset, using the sunrise and sunset from the weather
-forecast rather than a hardcoded pair of hours. It never blanks: the hours the
-Mac is locked, asleep or shut in a clamshell are exactly the hours nothing else
-on the desk is showing the time.
+It sets its own brightness, and that level says exactly one thing: whether the
+Mac is up. 75% of full while readings are still arriving, 25% once they stop.
+Brightness is the only channel on this panel you take in without reading
+anything — across a room, at an angle, out of the corner of an eye — so it
+carries the one fact you want before you have decided to look.
+
+It never blanks at the low end. The hours the Mac is away are exactly the hours
+nothing else on the desk is showing the time.
+
+This used to follow sunset instead, off the sunrise and sunset in the forecast,
+which was the wrong axis twice over: it dimmed the panel at eight in the evening
+while you were still sitting there working, and left it bright all night
+whenever the sky was the only thing that had changed. Keyed on the Mac it still
+dims when you go to bed — going to bed is what puts the Mac to sleep — without
+the panel needing to know the hour. The one case it does not cover is a machine
+left awake overnight on a long build; hold `BOOT` to dim it by hand, and the
+override lifts by itself the next time the automatic level moves.
 
 And it restarts itself if it wedges. The ESP32's task watchdog watches the loop
 task at a 30-second timeout — generous on purpose, because the longest thing
@@ -263,11 +286,61 @@ HTTPClient where there is no callback to feed from. A watchdog that trips on a
 slow morning is one that gets switched off. Requests over the USB link are fed
 throughout by the same idle hook that keeps the clock moving.
 
-The reason for the last restart is on the System page, in place of the clock
-speed, and only when there is something to say — a figure that always reads
-240 MHz is worth less than the one fact explaining why the uptime beside it just
-went back to zero. `panic = true`, so a trip also leaves a decoded backtrace on
-the serial console on its way out.
+A restart it did not choose raises a banner, the same one the Mac uses to
+interrupt you, because the alternative is learning nothing: a watchdog that
+quietly recovers the panel at four in the morning leaves no other trace but an
+uptime that went back to zero while nobody was looking. The reason stays in the
+vitals overlay afterwards for as long as the panel is up. `panic = true`, so a
+trip also leaves a decoded backtrace on the serial console on its way out.
+
+## Telling whether the Mac is awake
+
+The short answer is the **brightness**: full-ish means the Mac is answering,
+dim means it stopped. That is a deliberate choice of channel — it is the only
+thing here readable without looking directly at the panel. The rest of this
+section is what the screen adds once you do look.
+
+Two readings answer it in detail, and neither does it alone.
+
+The **link name** in the status bar is the first. `usb_net_bridge.py` is a
+process on the Mac, so a Mac that is asleep stops answering its pings; twelve
+seconds of silence and the word flips to `WiFi`. Read the *word*, not the
+colour — `WiFi` is green too, because `online()` only asks whether there is a
+link at all. `USB` therefore means something on that machine was scheduled
+within the last twelve seconds, which is as close to "awake" as the panel can
+get from this side of the cable. The reverse does not hold: `WiFi` is equally
+what an unplugged cable or a stopped bridge looks like.
+
+The **screen word** on the Mac page is the second — `external`, `built-in`,
+`screen off`. It comes from CoreGraphics rather than a shelled-out tool, which
+is what makes it cheap enough to sample every five seconds; the reading it
+replaces cost 25 ms of a 30 ms pass and was removed for it, where this one costs
+88 microseconds. Note the asymmetry it covers: a Mac that is itself asleep
+cannot answer at all, so `screen off` always means the machine is up and only
+the display has gone dark. That state is invisible to the link, which still
+reads `USB` throughout.
+
+That word is the one thing on the page that is never allowed to go stale. Past
+thirty seconds without a fresh reading it is replaced by `not answering` in
+warm, because a charge figure a minute old is still roughly true while
+`external` a minute after the Mac slept is simply false — and false in the
+direction that matters, since it claims the machine is up. Thirty is chosen
+against a known ceiling: the host resamples every five seconds and the panel
+asks every ten, so a current reading cannot be older than fifteen.
+
+Nothing new has to be probed for this. The panel already pings the bridge every
+four seconds and gives up after twelve, which is a liveness check running on its
+own processor, off USB power, against a process that has to be scheduled on the
+Mac to answer at all. Do not be tempted to add a network probe instead: macOS
+runs a Bonjour sleep proxy whose entire job is answering the network on behalf
+of a sleeping Mac, so pinging over WiFi would report awake when it is not.
+
+Together: `USB` plus a screen word is a Mac that is awake, and the word says
+whether anyone is likely looking at it. `not answering` means the panel asked
+and got nothing — asleep, unplugged, or a stopped server, and it deliberately
+does not guess which. If the clock and weather keep updating while only the
+Mac-sourced pages go quiet, it is the Mac rather than the network, because the
+forecast does not travel through it.
 
 ## Notes for later
 

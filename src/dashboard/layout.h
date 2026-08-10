@@ -125,7 +125,7 @@ int wrapText(const Str &text, int16_t w, int maxLines, Str *out,
   return used;
 }
 
-// Column width and gap for the CPU page's n bars.
+// Column width and gap for the n core bars along the foot of the Mac page.
 //
 // This was a flat 22px, chosen for the eleven cores of the Mac in front of it.
 // Anything wider ran off the panel and the draw loop cut the overflow off, so a
