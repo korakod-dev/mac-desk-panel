@@ -197,6 +197,10 @@ of it — as a PNG:
 .venv/bin/python tools/grab_screen.py shot 3      # capture all three pages
 ```
 
+It captures from wherever the panel is rather than from the first page, so which
+page lands in `shot0.png` is whichever one it was resting on — the usage page
+while the Mac is answering, the clock once it stops.
+
 | | |
 |---|---|
 | `N` | next page |
