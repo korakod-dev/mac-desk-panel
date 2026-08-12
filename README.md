@@ -216,7 +216,7 @@ of it — as a PNG:
 
 It captures from wherever the panel is rather than from the first page, so which
 page lands in `shot0.png` is whichever one it was resting on — the usage page
-while the Mac is answering, the clock once it stops.
+while somebody is at the Mac, the clock once its screens go dark.
 
 | | |
 |---|---|
@@ -283,21 +283,36 @@ the status bar says which mode it is in — cyan for automatic, warm while you
 have it, white when automatic is off.
 
 It also picks where to rest, off the same fact the brightness carries: the usage
-page while the Mac is answering, the clock once it stops. The two states are read
-by a person doing different things. A sleeping Mac means nobody is working, and
-the clock is the only thing on this panel still moving; a Mac that has started
-answering means somebody sat down, and what is left of the 5h window is the first
-thing that changes what they do next. So the wake is the panel's cue to have the
-usage figures already up, before anyone asks for them.
+page while somebody is at the Mac, the clock once nobody is. The two states are
+read by a person doing different things. A dark Mac means nobody is working, and
+the clock is the only thing on this panel still moving; a Mac whose screen has
+just come on means somebody sat down, and what is left of the 5h window is the
+first thing that changes what they do next. So the wake is the panel's cue to
+have the usage figures already up, before anyone asks for them.
+
+"Nobody is at it" is two conditions, and it takes only one: the readings stopped
+arriving, **or** they are still arriving and every screen over there is off. The
+second half is the one that earns its keep on this desk. The screens idle out
+after ten minutes, but a couple of the apps that live on this Mac hold sleep
+assertions, so the machine itself answers all night — and on the answering test
+alone the panel sat on the Claude usage page at three-quarter brightness in a
+dark room, saying somebody was working. Even a Mac that really is asleep
+dark-wakes for maintenance every fifteen minutes with Power Nap on, and each of
+those was another minute and a half of the same. The screen going dark is also
+the whole of what a person sees when they say the Mac went to sleep, so it is
+the honest thing to follow.
 
 That is a floor, not an interruption: the crossing moves where automatic falls
 back to, rather than borrowing the screen and handing it back. Both alert
-conditions above are ignored while the Mac is asleep — they are made of numbers
+conditions above are ignored once the readings stop — they are made of numbers
 that stopped arriving, so a full window found then is a reading from before it
 went, and leaving the clock for it would be old news presented as if it had just
-happened, at exactly the hours the clock is what the panel is for. A crossing
-that lands during a banner or a manual hold waits for it, and if the Mac woke and
-went back to sleep in between, only where it ended up is arrived on.
+happened, at exactly the hours the clock is what the panel is for. Note which
+half of the test that is: an unattended build on a Mac with its screens off is
+running *now*, so the core columns still get raised for whoever comes back to
+find out what it did. A crossing that lands during a banner or a manual hold
+waits for it, and if the Mac woke and went dark again in between, only where it
+ended up is arrived on.
 
 A banner that times out unanswered arrives at that same resting page, and for
 the same reason the floor exists at all: whatever page it was covering was
@@ -306,10 +321,10 @@ you take down with a button is the opposite case and is left alone — someone i
 standing at the panel, and the page they are on is theirs.
 
 It sets its own brightness, and that level says the same thing on the one channel
-you take in without reading anything: 75% of full while readings are still
-arriving, 25% once they stop. Across a room, at an angle, out of the corner of an
-eye — it carries the fact before you have decided to look, and the page you find
-when you do look agrees with it.
+you take in without reading anything: 75% of full while somebody is at the Mac,
+25% once nobody is. Across a room, at an angle, out of the corner of an eye — it
+carries the fact before you have decided to look, and the page you find when you
+do look agrees with it.
 
 It never blanks at the low end. The hours the Mac is away are exactly the hours
 nothing else on the desk is showing the time.
@@ -318,10 +333,10 @@ This used to follow sunset instead, off the sunrise and sunset in the forecast,
 which was the wrong axis twice over: it dimmed the panel at eight in the evening
 while you were still sitting there working, and left it bright all night
 whenever the sky was the only thing that had changed. Keyed on the Mac it still
-dims when you go to bed — going to bed is what puts the Mac to sleep — without
-the panel needing to know the hour. The one case it does not cover is a machine
-left awake overnight on a long build; hold `BOOT` to dim it by hand, and the
-override lifts by itself the next time the automatic level moves.
+dims when you go to bed — the screen going dark is what going to bed looks
+like — without the panel needing to know the hour, and a machine left running
+overnight on a long build dims along with it. Hold `BOOT` to override the level
+by hand; it lifts by itself the next time the automatic one moves.
 
 And it restarts itself if it wedges. The ESP32's task watchdog watches the loop
 task at a 30-second timeout — generous on purpose, because the longest thing
@@ -339,10 +354,12 @@ trip also leaves a decoded backtrace on the serial console on its way out.
 
 ## Telling whether the Mac is awake
 
-The short answer is the **brightness**: full-ish means the Mac is answering,
-dim means it stopped. That is a deliberate choice of channel — it is the only
+The short answer is the **brightness**: full-ish means somebody is at that
+machine, dim means nobody is — either it stopped answering, or it is answering
+with every screen dark. That is a deliberate choice of channel — it is the only
 thing here readable without looking directly at the panel. The rest of this
-section is what the screen adds once you do look.
+section is what the screen adds once you do look, and it separates the two
+halves the brightness rolls together.
 
 Two readings answer it in detail, and neither does it alone.
 
@@ -380,7 +397,10 @@ runs a Bonjour sleep proxy whose entire job is answering the network on behalf
 of a sleeping Mac, so pinging over WiFi would report awake when it is not.
 
 Together: `USB` plus a screen word is a Mac that is awake, and the word says
-whether anyone is likely looking at it. `not answering` means the panel asked
+whether anyone is likely looking at it — which is the pair the resting page and
+the brightness are built out of. `external` or `built-in` is somebody there;
+`screen off` is a machine running with nobody at it, and reads dim on the clock
+for the same reason a stopped one does. `not answering` means the panel asked
 and got nothing — asleep, unplugged, or a stopped server, and it deliberately
 does not guess which. If the clock and weather keep updating while only the
 Mac-sourced pages go quiet, it is the Mac rather than the network, because the

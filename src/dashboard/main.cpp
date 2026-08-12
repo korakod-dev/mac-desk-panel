@@ -22,16 +22,17 @@
 //  to the Mac page while that machine is loaded and to the usage page as a
 //  window fills; any button hands control back for two minutes.
 //
-//  Where it comes to rest says whether the Mac is up: the usage page while that
-//  machine is answering, the clock once it stops. Asleep means nobody is working
-//  and the clock is the only thing here still moving; awake means somebody sat
-//  down, and what is left of the window is what they need first.
+//  Where it comes to rest says whether anyone is at the Mac: the usage page
+//  while that machine is answering with a screen lit, the clock once it stops
+//  or goes dark. Dark means nobody is working and the clock is the only thing
+//  here still moving; lit means somebody sat down, and what is left of the
+//  window is what they need first.
 //
 //  Brightness says the same thing on the channel you take in without looking.
-//  75% while the Mac is answering, 25% once it stops. Never blanked — this is a
-//  panel on a desk, not a second screen for the Mac, and the hours that machine
-//  is away are exactly the hours nothing else here is showing the time. See
-//  "automatic behaviour".
+//  75% while somebody is there, 25% once they are not. Never blanked — this is
+//  a panel on a desk, not a second screen for the Mac, and the hours that
+//  machine is away are exactly the hours nothing else here is showing the time.
+//  See "automatic behaviour".
 //
 //  Every page is composed into a full-screen sprite in PSRAM and pushed in one
 //  go, so nothing flickers and partial redraws can't leave stale pixels behind.
@@ -415,24 +416,53 @@ static int macAgeNow() {
 // without the panel calling the Mac dead over it.
 static const int MAC_STALE_S = 30;
 
-// The panel's one answer to "is that machine up", and the only honest one it
-// has: readings are still arriving, so something over there is being scheduled
-// to send them. No probe of its own is needed for this and none would be
-// better — a sleeping Mac has a Bonjour sleep proxy answering the network on
-// its behalf, while a process has to actually run to fill in a battery
-// percentage.
-//
-// Deliberately says nothing about the screen. A Mac in clamshell with every
-// display dark is awake by this test, which is the distinction the panel is
-// for: awake is "ready to use", and the screen word beside it says the rest.
-//
-// Three things read this — the word on the Mac page, the resting page, and the
-// backlight — so it lives here rather than in any of them, where they could
-// drift into disagreeing about the same machine.
-static bool macAwake() {
+// Whether readings are still arriving, and so whether the numbers on the Mac
+// page describe the machine as it is now. Something over there is being
+// scheduled to send them; no probe of the panel's own is needed for this and
+// none would be better — a sleeping Mac has a Bonjour sleep proxy answering the
+// network on its behalf, while a process has to actually run to fill in a
+// battery percentage.
+static bool macAnswering() {
   int age = macAgeNow();
   return age >= 0 && age <= MAC_STALE_S;
 }
+
+// Whether anything over there is lit. "" is the reading having failed, and is
+// read as lit: an unknown screen should leave the panel behaving as it did
+// before this field existed, not park it on the clock in front of someone who
+// is working.
+//
+// "none" is documented as rare and transient, and is taken at face value
+// anyway. Reaching it means the display list emptied, which off a desk happens
+// while a monitor is being plugged or unplugged — a poll or two on the clock,
+// self-correcting, and not worth carrying a settling timer to avoid.
+static bool macScreensOn() {
+  return !(mac.display == "asleep" || mac.display == "none");
+}
+
+// The panel's answer to "is anyone over there", which is the question the
+// resting page and the backlight are really asking.
+//
+// This used to be macAnswering() alone, and deliberately said nothing about the
+// screen: a Mac in clamshell driving nothing was awake by that test, on the
+// grounds that awake meant "ready to use". What that missed is that this Mac is
+// hardly ever *not* ready to use. Its screens idle out after ten minutes, but
+// LINE and Claude both hold sleep assertions, so the machine itself keeps
+// answering all night — and the panel sat on the Claude usage page, at
+// three-quarter brightness, on a desk in a dark room, saying somebody was
+// working. Even a Mac that really is asleep dark-wakes for maintenance every
+// fifteen minutes with Power Nap on, and each of those was another minute and a
+// half of the same thing.
+//
+// Every screen being off is the closest this machine has to "nobody is here",
+// and it is the same event a person means by "the Mac went to sleep" — the
+// screen going dark is the whole of what they saw. The reading costs nothing:
+// mac_stats_server takes it on its fast pass from the framework that owns it.
+//
+// Two things read this — the resting page and the backlight — and they must not
+// disagree about the same machine, which is why it is one function rather than
+// the same test written twice.
+static bool macAwake() { return macAnswering() && macScreensOn(); }
 
 static bool fetchMac() {
   if (!net::online()) {
@@ -695,9 +725,9 @@ static bool usageTight() {
 
 // Where the panel settles when nothing is happening, which is the other half of
 // what the Mac going away is worth saying. The two states want different pages
-// because they are read by a person doing different things: a sleeping Mac means
+// because they are read by a person doing different things: a dark Mac means
 // nobody is working, and the only field on this panel that is still moving is
-// the clock; a Mac that just started answering means somebody sat down, and the
+// the clock; a Mac whose screen just came on means somebody sat down, and the
 // first thing that changes what they do next is how much of the window is left.
 //
 // This is the resting page rather than a raised one — it replaces where auto
@@ -705,12 +735,13 @@ static bool usageTight() {
 //
 // Takes the state rather than reading macAwake() itself, so the page and the
 // crossing that asked for it cannot come from two different readings: the test
-// is a staleness clock, and it can turn over between two calls a line apart.
+// runs off a staleness clock, and it can turn over between two calls a line
+// apart.
 static uint8_t restPage(bool awake) { return awake ? PAGE_USAGE : PAGE_NOW; }
 
 // Set when something has decided the panel belongs back at its resting page:
-// the Mac crossing between asleep and answering, or a banner that ran out its
-// own ttl with nobody answering it. It lives out here rather than inside
+// the Mac crossing between dark and in use, or a banner that ran out its own
+// ttl with nobody answering it. It lives out here rather than inside
 // autoPickPage() because the second of those is noticed in loop(), a long way
 // from the function that acts on it. Either way it is a request, not a move —
 // it waits for a hold or a banner to be out of the way, and two requests
@@ -749,13 +780,19 @@ static bool autoPickPage() {
     restWanted = true;
   }
 
-  // Neither alert condition survives the Mac going away: both are made of
+  // Neither alert condition survives the Mac going quiet: both are made of
   // numbers that stopped arriving, so a full window or a loaded machine found
-  // while it is asleep is a reading from before it went. Leaving the clock for
-  // one would be the panel presenting old news as if it had just happened —
-  // and it would be doing it at the hours the clock is the only thing on the
-  // desk still worth showing.
-  bool busy = awake && macBusy(), tight = awake && usageTight();
+  // after that is a reading from before it went. Leaving the clock for one
+  // would be the panel presenting old news as if it had just happened — and it
+  // would be doing it at the hours the clock is the only thing on the desk
+  // still worth showing.
+  //
+  // Against macAnswering() rather than the resting test, because staleness is
+  // the whole of the reason: a machine with its screens off is nobody's idea of
+  // in use, but a build running on it is running now, and the columns that show
+  // it are worth raising for whoever comes back to find out what it did.
+  bool answering = macAnswering();
+  bool busy = answering && macBusy(), tight = answering && usageTight();
   if (!busy)  busyShown = false;
   if (!tight) tightShown = false;
 
@@ -771,8 +808,10 @@ static bool autoPickPage() {
     restWanted = false;
     autoReturn = -1;
     page = restPage(awake);
-    Serial.printf("[auto] resting on page %u, mac %s\n",
-                  page, awake ? "awake" : "asleep");
+    Serial.printf("[auto] resting on page %u, mac %s\n", page,
+                  awake            ? "awake"
+                  : macAnswering() ? "dark"
+                                   : "asleep");
   } else if (tight && !tightShown) {
     // Usage wins the tie: a full window stops the work, a busy machine only
     // slows it down.
@@ -791,9 +830,9 @@ static bool autoPickPage() {
 
 // --- backlight ---------------------------------------------------------------
 
-// Brightness is one of the panel's two answers to "is the Mac up" — the resting
-// page is the other — and the only thing it answers. It is the one channel here
-// that carries across a room: you take it
+// Brightness is one of the panel's two answers to "is anyone at the Mac" — the
+// resting page is the other — and the only thing it answers. It is the one
+// channel here that carries across a room: you take it
 // in without reading anything, from an angle, out of the corner of an eye —
 // which is more than can be said for a four-letter word in 16px type at the
 // top left corner, and that word is what this replaces.
@@ -815,9 +854,10 @@ static int16_t blManual  = -1;         // -1 = follow the rules below
 // Sunset used to move this instead, which was the wrong axis twice over. It
 // dimmed the panel at eight in the evening while you were still sitting there
 // working, and left it bright all night whenever the sky was the only thing
-// that had changed. What the level is worth saying is whether the machine is
-// ready — and that dims the panel when you go to bed, because going to bed is
-// what puts the Mac to sleep, without the panel having to know the hour.
+// that had changed. What the level is worth saying is whether anyone is over
+// there — and that dims the panel when you go to bed, because the screen going
+// dark is what going to bed looks like, without the panel having to know the
+// hour.
 //
 // The sunrise and sunset the forecast was fetched for went with it. Nothing
 // reads them now, and this project does not keep readings that nothing reads.
@@ -1415,16 +1455,19 @@ static void pageMac() {
   // its own liveness probe and does not need the Mac's cooperation to fail.
   // This is only the draw catching up with what net_link already decided.
   if (mac.valid && mac.display.length()) {
-    // The same test the backlight brightens on, so the word and the level
-    // cannot end up describing the same machine differently — a dim panel
-    // reading "external" would be the panel arguing with itself.
+    // Whether the reading is current, which is all this word needs: it is the
+    // screen state, and the backlight is the screen state too, so the two
+    // cannot end up describing the same machine differently. A dim panel
+    // reading "external" would be the panel arguing with itself, and cannot
+    // happen — a lit screen is what brightens it. Dim beside "screen off" is
+    // the two of them agreeing.
     //
     // Far tighter than the ninety the staleness badge uses, and deliberately:
     // that badge marks numbers worth reading with caution, this marks a word
     // that has to be either right or gone. Past ninety the badge appears, the
     // room here runs out, and the guard below drops this — by then the badge is
     // saying the same thing with a figure attached.
-    bool current = macAwake();
+    bool current = macAnswering();
     uint16_t col = current ? C_DIM : C_WARM;
 
     // "not answering" rather than "asleep": the panel cannot tell a sleeping
