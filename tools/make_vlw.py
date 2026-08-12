@@ -14,10 +14,17 @@ VLW layout, all fields big-endian int32:
 Picking a Thai font matters. TFT_eSPI does no OpenType shaping — it places each
 codepoint at `cursor_x + dX` and advances by `xAdvance` — so Thai only comes out
 right with a font whose combining marks already carry xAdvance == 0 and a
-negative dX. macOS Sukhumvit Set does; macOS Thonburi does NOT (it bakes a
-dotted-circle placeholder into every isolated mark glyph and gives it a real
-advance, so vowels and tone marks land beside letters instead of above them).
-Run preview_vlw.py after generating to check before flashing.
+negative dX. IBM Plex Sans Thai does, and macOS Sukhumvit Set does; macOS
+Thonburi does NOT (it bakes a dotted-circle placeholder into every isolated mark
+glyph and gives it a real advance, so vowels and tone marks land beside letters
+instead of above them). The zero-advance count printed on the way out is that
+test in one number: a Thai set reporting none of them will not stack. Run
+preview_vlw.py after generating to check before flashing.
+
+The font this project uses is vendored at tools/fonts/, so a fresh clone can
+regenerate every header without going and finding one. It is IBM Plex Sans Thai
+under the SIL Open Font License — a single file carrying both the Latin the
+panel shows and the Thai the generator supports.
 
 Usage:
     make_vlw.py <font.ttf> <pixel_size> <out.h> <c_symbol> [--face N] [--set S]
@@ -27,8 +34,10 @@ Usage:
     --set thai       ASCII + the full Thai block
 
     # what this project uses
-    make_vlw.py /System/Library/Fonts/Supplemental/SukhumvitSet.ttc \\
-        16 src/fonts/ui16.h UiFont16 --face 2 --set ascii
+    make_vlw.py tools/fonts/IBMPlexSansThai-Regular.ttf \\
+        16 src/fonts/ui16.h UiFont16 --set ascii
+
+    --face picks a face out of a .ttc; a plain .ttf has only face 0.
 """
 
 import sys

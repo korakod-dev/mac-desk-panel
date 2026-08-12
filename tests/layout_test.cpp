@@ -49,8 +49,8 @@ static Font loadVlw(const char *path) {
                 "The .vlw files are build byproducts and gitignored. Regenerate\n"
                 "them (this also rewrites the identical .h) with:\n\n"
                 "  .venv/bin/python tools/make_vlw.py \\\n"
-                "      /System/Library/Fonts/Supplemental/SukhumvitSet.ttc \\\n"
-                "      16 src/fonts/ui16.h UiFont16 --face 2 --set ascii\n"
+                "      tools/fonts/IBMPlexSansThai-Regular.ttf \\\n"
+                "      16 src/fonts/ui16.h UiFont16 --set ascii\n"
                 "  ... and the same for ui24 (24px) and big64 (64px, --set numeric)\n\n",
                 path);
         exit(2);

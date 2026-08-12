@@ -163,15 +163,24 @@ Messages are squeezed to printable ASCII, because that is all the fonts carry.
 
 ## Fonts
 
-The three smooth fonts are generated from a system TTF into TFT_eSPI's VLW
-format and checked in as C headers:
+The three smooth fonts are generated from IBM Plex Sans Thai — vendored at
+`tools/fonts/` under the SIL Open Font License — into TFT_eSPI's VLW format, and
+checked in as C headers:
 
 ```bash
-.venv/bin/python tools/make_vlw.py \
-    /System/Library/Fonts/Supplemental/SukhumvitSet.ttc \
-    16 src/fonts/ui16.h UiFont16 --face 2 --set ascii
+F=tools/fonts/IBMPlexSansThai-Regular.ttf
+.venv/bin/python tools/make_vlw.py $F 16 src/fonts/ui16.h  UiFont16  --set ascii
+.venv/bin/python tools/make_vlw.py $F 24 src/fonts/ui24.h  UiFont24  --set ascii
+.venv/bin/python tools/make_vlw.py $F 64 src/fonts/big64.h BigFont64 --set numeric
 .venv/bin/python tools/preview_vlw.py src/fonts/ui16.vlw /tmp/ui16.png "20:45  28°"
 ```
+
+The font sits in the repo rather than being named as a path into
+`/System/Library`. It used to be macOS's Sukhumvit Set, which made the headers
+something only a Mac could regenerate and the glyphs inside them something
+nobody could redistribute. Plex Sans Thai is one file carrying both the Latin
+the panel shows and the Thai below, and the licence lets it travel with the
+source.
 
 `make_vlw.py` writes the raw `.vlw` beside the header so `preview_vlw.py` can
 check what was actually emitted rather than re-deriving it from the TTF. Only
@@ -184,8 +193,10 @@ are *drawn* rather than typed, and `mac_stats_server.py` substitutes non-ASCII
 out of notification text before storing it.
 
 Thai works, but only with a font whose combining marks already carry
-`xAdvance == 0` and a negative `dX` — TFT_eSPI does no OpenType shaping.
-Sukhumvit Set does; Thonburi does not. See the comment in `make_vlw.py`.
+`xAdvance == 0` and a negative `dX` — TFT_eSPI does no OpenType shaping. Plex
+Sans Thai does, and so did Sukhumvit Set; Thonburi does not. The zero-advance
+count `make_vlw.py` prints on the way out is that test in one number — a Thai
+set reporting none will not stack. See the comment in `make_vlw.py`.
 
 ## Talking to a running panel
 
@@ -381,10 +392,10 @@ Nothing outstanding. Things worth knowing about the shape of it:
 MIT — see [LICENSE](LICENSE). Two things in the tree are not mine to put under
 it, and both are named where they sit:
 
-- **`src/fonts/*.h`** are Sukhumvit Set rasterised into VLW. The glyphs are
-  Apple's, shipped with macOS; what is mine is the generator that reads them.
-  Point `make_vlw.py` at a font you have the right to redistribute and the
-  headers regenerate — see [Fonts](#fonts).
+- **`tools/fonts/IBMPlexSansThai-Regular.ttf`**, and the `src/fonts/*.h` headers
+  rasterised out of it, are IBM Plex Sans Thai — © IBM Corp., SIL Open Font
+  License, `tools/fonts/OFL.txt` beside it. The generator is mine and the glyphs
+  are not; the OFL is what lets both sit in the same repo and be handed on.
 - **`measure()` in `tests/layout_test.cpp`** is TFT_eSPI's `textWidth`
   transcribed line for line (© Bodmer, FreeBSD licence), which is the whole
   point of it: a width function re-derived from the spec would agree with the
