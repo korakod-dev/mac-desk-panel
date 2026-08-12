@@ -22,10 +22,16 @@
 //  to the Mac page while that machine is loaded and to the usage page as a
 //  window fills; any button hands control back for two minutes.
 //
-//  Brightness says one thing: whether the Mac is up. 75% while it is answering,
-//  25% once it stops. Never blanked — this is a panel on a desk, not a second
-//  screen for the Mac, and the hours that machine is away are exactly the hours
-//  nothing else here is showing the time. See "automatic behaviour".
+//  Where it comes to rest says whether the Mac is up: the usage page while that
+//  machine is answering, the clock once it stops. Asleep means nobody is working
+//  and the clock is the only thing here still moving; awake means somebody sat
+//  down, and what is left of the window is what they need first.
+//
+//  Brightness says the same thing on the channel you take in without looking.
+//  75% while the Mac is answering, 25% once it stops. Never blanked — this is a
+//  panel on a desk, not a second screen for the Mac, and the hours that machine
+//  is away are exactly the hours nothing else here is showing the time. See
+//  "automatic behaviour".
 //
 //  Every page is composed into a full-screen sprite in PSRAM and pushed in one
 //  go, so nothing flickers and partial redraws can't leave stale pixels behind.
@@ -420,9 +426,9 @@ static const int MAC_STALE_S = 30;
 // display dark is awake by this test, which is the distinction the panel is
 // for: awake is "ready to use", and the screen word beside it says the rest.
 //
-// Two things read this — the word on the Mac page and the backlight — so it
-// lives here rather than in either of them, where the two could drift into
-// disagreeing about the same machine.
+// Three things read this — the word on the Mac page, the resting page, and the
+// backlight — so it lives here rather than in any of them, where they could
+// drift into disagreeing about the same machine.
 static bool macAwake() {
   int age = macAgeNow();
   return age >= 0 && age <= MAC_STALE_S;
@@ -687,6 +693,21 @@ static bool usageTight() {
   return usage.valid && (usage.h5 >= 85 || usage.d7 >= 85);
 }
 
+// Where the panel settles when nothing is happening, which is the other half of
+// what the Mac going away is worth saying. The two states want different pages
+// because they are read by a person doing different things: a sleeping Mac means
+// nobody is working, and the only field on this panel that is still moving is
+// the clock; a Mac that just started answering means somebody sat down, and the
+// first thing that changes what they do next is how much of the window is left.
+//
+// This is the resting page rather than a raised one — it replaces where auto
+// falls back to, instead of borrowing the screen for a while and handing it back.
+//
+// Takes the state rather than reading macAwake() itself, so the page and the
+// crossing that asked for it cannot come from two different readings: the test
+// is a staleness clock, and it can turn over between two calls a line apart.
+static uint8_t restPage(bool awake) { return awake ? PAGE_USAGE : PAGE_NOW; }
+
 static void autoGoTo(uint8_t want) {
   if (page == want) return;
   if (autoReturn < 0) autoReturn = page;
@@ -702,10 +723,30 @@ static void autoGoTo(uint8_t want) {
 // true when a banner comes down or a hold expires is still worth showing then,
 // while a spike that came and went in the meantime has already cleared its own
 // mark and stays quiet.
+//
+// The Mac crossing between asleep and answering waits its turn the same way, and
+// keeps only the latest crossing while it waits: a machine that woke and went
+// back to sleep behind a banner has moved the resting page twice, and only where
+// it ended up is worth arriving on.
 static bool autoPickPage() {
   static bool busyShown = false, tightShown = false;
+  static int8_t lastAwake = -1;     // -1 until the first reading decides
+  static bool   restMoved = false;  // the resting page changed, not yet shown
 
-  bool busy = macBusy(), tight = usageTight();
+  bool   awake = macAwake();
+  int8_t state = awake ? 1 : 0;
+  if (state != lastAwake) {
+    lastAwake = state;
+    restMoved = true;
+  }
+
+  // Neither alert condition survives the Mac going away: both are made of
+  // numbers that stopped arriving, so a full window or a loaded machine found
+  // while it is asleep is a reading from before it went. Leaving the clock for
+  // one would be the panel presenting old news as if it had just happened —
+  // and it would be doing it at the hours the clock is the only thing on the
+  // desk still worth showing.
+  bool busy = awake && macBusy(), tight = awake && usageTight();
   if (!busy)  busyShown = false;
   if (!tight) tightShown = false;
 
@@ -714,7 +755,16 @@ static bool autoPickPage() {
   if (!autoPages || userDriving() || notify.showing) return false;
 
   uint8_t was = page;
-  if (tight && !tightShown) {
+  if (restMoved) {
+    // Straight to the page rather than through autoGoTo: this is the floor
+    // moving, so there is nothing left to come back to, and a return plan made
+    // while the Mac was up would drag the panel off the clock after it went.
+    restMoved  = false;
+    autoReturn = -1;
+    page = restPage(awake);
+    Serial.printf("[auto] mac %s, resting on page %u\n",
+                  awake ? "awake" : "asleep", page);
+  } else if (tight && !tightShown) {
     // Usage wins the tie: a full window stops the work, a busy machine only
     // slows it down.
     tightShown = true;
@@ -732,8 +782,9 @@ static bool autoPickPage() {
 
 // --- backlight ---------------------------------------------------------------
 
-// Brightness is the panel's answer to "is the Mac up", and the only thing it
-// answers. It is the one channel here that carries across a room: you take it
+// Brightness is one of the panel's two answers to "is the Mac up" — the resting
+// page is the other — and the only thing it answers. It is the one channel here
+// that carries across a room: you take it
 // in without reading anything, from an angle, out of the corner of an eye —
 // which is more than can be said for a four-letter word in 16px type at the
 // top left corner, and that word is what this replaces.

@@ -261,11 +261,28 @@ hands control back for two minutes; `A` turns it off entirely. The lit dot in
 the status bar says which mode it is in — cyan for automatic, warm while you
 have it, white when automatic is off.
 
-It sets its own brightness, and that level says exactly one thing: whether the
-Mac is up. 75% of full while readings are still arriving, 25% once they stop.
-Brightness is the only channel on this panel you take in without reading
-anything — across a room, at an angle, out of the corner of an eye — so it
-carries the one fact you want before you have decided to look.
+It also picks where to rest, off the same fact the brightness carries: the usage
+page while the Mac is answering, the clock once it stops. The two states are read
+by a person doing different things. A sleeping Mac means nobody is working, and
+the clock is the only thing on this panel still moving; a Mac that has started
+answering means somebody sat down, and what is left of the 5h window is the first
+thing that changes what they do next. So the wake is the panel's cue to have the
+usage figures already up, before anyone asks for them.
+
+That is a floor, not an interruption: the crossing moves where automatic falls
+back to, rather than borrowing the screen and handing it back. Both alert
+conditions above are ignored while the Mac is asleep — they are made of numbers
+that stopped arriving, so a full window found then is a reading from before it
+went, and leaving the clock for it would be old news presented as if it had just
+happened, at exactly the hours the clock is what the panel is for. A crossing
+that lands during a banner or a manual hold waits for it, and if the Mac woke and
+went back to sleep in between, only where it ended up is arrived on.
+
+It sets its own brightness, and that level says the same thing on the one channel
+you take in without reading anything: 75% of full while readings are still
+arriving, 25% once they stop. Across a room, at an angle, out of the corner of an
+eye — it carries the fact before you have decided to look, and the page you find
+when you do look agrees with it.
 
 It never blanks at the low end. The hours the Mac is away are exactly the hours
 nothing else on the desk is showing the time.
