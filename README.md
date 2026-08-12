@@ -375,3 +375,20 @@ Nothing outstanding. Things worth knowing about the shape of it:
   inside HTTPClient, which offers no callback, so the clock does stop for the
   length of a slow weather fetch on the radio. The watchdog timeout is sized
   around exactly that.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Two things in the tree are not mine to put under
+it, and both are named where they sit:
+
+- **`src/fonts/*.h`** are Sukhumvit Set rasterised into VLW. The glyphs are
+  Apple's, shipped with macOS; what is mine is the generator that reads them.
+  Point `make_vlw.py` at a font you have the right to redistribute and the
+  headers regenerate — see [Fonts](#fonts).
+- **`measure()` in `tests/layout_test.cpp`** is TFT_eSPI's `textWidth`
+  transcribed line for line (© Bodmer, FreeBSD licence), which is the whole
+  point of it: a width function re-derived from the spec would agree with the
+  wrapper it is meant to be checking.
+
+TFT_eSPI and ArduinoJson are fetched at build time, not vendored, and keep their
+own terms.

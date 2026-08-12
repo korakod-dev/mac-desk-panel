@@ -77,7 +77,10 @@ static Font loadVlw(const char *path) {
 
 static const Font *g_font = nullptr;
 
-// TFT_eSPI::textWidth, SMOOTH_FONT branch (TFT_eSPI.cpp:3079-3098).
+// TFT_eSPI::textWidth, SMOOTH_FONT branch (TFT_eSPI.cpp:3079-3098). This and
+// the spaceWidth line above are transcribed from TFT_eSPI, copyright (c) Bodmer
+// (https://github.com/Bodmer), FreeBSD licence — which asks that the notice
+// travel with source taken from it, so it travels here.
 static int16_t measure(const char *s) {
     int32_t width = 0;
     while (*s) {
