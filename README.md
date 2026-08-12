@@ -11,20 +11,71 @@ there as a fallback, not a requirement.
 
 | | |
 |---|---|
-| ![clock and weather](docs/pages/1-now.png) | ![Claude Code usage](docs/pages/2-usage.png) |
-| **now** — time, date, temperature, conditions | **usage** — the 5h and 7d windows, and when they roll |
-| ![Mac vitals and cores](docs/pages/3-mac.png) | ![the panel's own vitals](docs/pages/4-vitals.png) |
-| **mac** — charge, screen, memory, disk, a column per core | **vitals** — not a page: hold `IO14` for the panel's own |
+| ![the flip clock](docs/pages/1-flip.png) | ![clock and weather](docs/pages/2-now.png) |
+| **flip** — a split-flap clock, and how warm it is | **now** — time, date, temperature, conditions |
+| ![Claude Code usage](docs/pages/3-usage.png) | ![Mac vitals and cores](docs/pages/4-mac.png) |
+| **usage** — the 5h and 7d windows, and when they roll | **mac** — charge, screen, memory, disk, a column per core |
+| ![the panel's own vitals](docs/pages/5-vitals.png) | |
+| **vitals** — not a page: hold `IO14` for the panel's own | |
 
 `IO14` moves to the next page, and held, brings up the panel's own vitals over
 whatever is showing. `BOOT` refreshes the page in front of you, and held, dims
 or brightens the panel.
+
+The two clock pages are not a duplicate. **flip** is what the panel comes to
+rest on once the Mac's screens go dark, and the hours it spends there are the
+hours nobody is reading anything: what a page has to do at a quarter brightness
+from the far side of a dark room is be legible from the doorway, which four
+cards 88px tall manage and a date, a place and a line of forecast in 16px type
+do not. It carries the temperature and what it feels like underneath, at a size
+you have to come closer for, because that is the second question and not the
+first. Everything it leaves out, **now** still has, one press to the right.
+
+A card that changes folds rather than simply becoming the new digit — the old
+one down over the fresh half waiting underneath, then the new lower half up out
+of the seam. Nothing rotates a bitmap: the leaf is the same card face drawn
+through a viewport that closes onto the seam and opens again below it, dimming
+as it goes, which at this size is what a fold looks like. It is the only thing
+on the panel drawn as an animation rather than as a state, so it is also the
+only thing that borrows a faster frame — 40 ms for the third of a second it is
+in flight, and back to the usual once a second after.
 
 The vitals are behind a hold rather than in the cycle because every figure on
 them answers "is this thing working" — a question you ask on purpose after
 noticing something wrong, never one you answer in a glance. As a page they cost
 a press on every trip round to skip past three constants and two fields that
 read `--` whenever the link is the cable.
+
+## Two questions, two ramps
+
+The four colours of the flip clock's cards are the colours of the whole panel.
+They started there because a split-flap board needs its cards told apart and a
+`4` is not worse than a `3` — and that turned out to be the thing every other
+page wanted too. The 7d window is not worse than the 5h one, disk is not worse
+than memory, and a P core at 90% is not a warning; it is a P core doing its job.
+
+So there are two ramps and they never overlap. **Teal, blue, violet, magenta**
+says *which reading this is*: the card it is on, the chip that labels it, the
+column it belongs to, the dot in the status bar you would press to get back to
+it. **Green, orange, red** says *how that reading is doing*, and is kept for the
+figures that are actually graded — the percentage, the temperature, the charge.
+A page can then answer both at once, where colouring by severity alone left the
+usage page as two identical grey rows and the Mac page as one long line divided
+by hairlines.
+
+Cards are what carry the first ramp. The same two-tone body as a flip card and
+the same rounded corners, at a quarter of the strength, because a card with an
+88px digit on it can be its hue at full and one carrying a bar, a percentage and
+a line of small print has to sit behind all three. The label on it is the one
+place the hue comes back at full: a dark word in a saturated lozenge, which is
+also how the clock's own digits sit on their cards. Text on a card is drawn
+transparent, blended against whatever is under it, which is what lets a string
+cross the seam in the middle of a card without being boxed in the wrong half's
+shade.
+
+The clock on the **now** page is drawn a glyph at a time so its four digits can
+take the ramp in the order the cards do. It is the same reading as the page to
+its left and the colours are what say so.
 
 ## How the pieces fit
 
@@ -169,17 +220,23 @@ Messages are squeezed to printable ASCII, because that is all the fonts carry.
 
 ## Fonts
 
-The three smooth fonts are generated from IBM Plex Sans Thai — vendored at
+The four smooth fonts are generated from IBM Plex Sans Thai — vendored at
 `tools/fonts/` under the SIL Open Font License — into TFT_eSPI's VLW format, and
 checked in as C headers:
 
 ```bash
 F=tools/fonts/IBMPlexSansThai-Regular.ttf
-.venv/bin/python tools/make_vlw.py $F 16 src/fonts/ui16.h  UiFont16  --set ascii
-.venv/bin/python tools/make_vlw.py $F 24 src/fonts/ui24.h  UiFont24  --set ascii
-.venv/bin/python tools/make_vlw.py $F 64 src/fonts/big64.h BigFont64 --set numeric
+.venv/bin/python tools/make_vlw.py $F 16 src/fonts/ui16.h   UiFont16   --set ascii
+.venv/bin/python tools/make_vlw.py $F 24 src/fonts/ui24.h   UiFont24   --set ascii
+.venv/bin/python tools/make_vlw.py $F 64 src/fonts/big64.h  BigFont64  --set numeric
+.venv/bin/python tools/make_vlw.py $F 88 src/fonts/flip88.h FlipFont88 --set numeric
 .venv/bin/python tools/preview_vlw.py src/fonts/ui16.vlw /tmp/ui16.png "20:45  28°"
 ```
+
+`--set numeric` is why the two big faces cost what they do and not more: the
+flip clock only ever shows a digit or a dash, so baking the other ninety-odd
+printable characters at 88px would be 37 KB of flash spent on glyphs nothing
+can reach.
 
 The font sits in the repo rather than being named as a path into
 `/System/Library`. It used to be macOS's Sukhumvit Set, which made the headers
@@ -211,12 +268,12 @@ The firmware takes single-byte commands on the console, and
 of it — as a PNG:
 
 ```bash
-.venv/bin/python tools/grab_screen.py shot 3      # capture all three pages
+.venv/bin/python tools/grab_screen.py shot 4      # capture all four pages
 ```
 
 It captures from wherever the panel is rather than from the first page, so which
 page lands in `shot0.png` is whichever one it was resting on — the usage page
-while somebody is at the Mac, the clock once its screens go dark.
+while somebody is at the Mac, the flip clock once its screens go dark.
 
 | | |
 |---|---|
@@ -280,12 +337,14 @@ machine's load passes three quarters of its core count, and to the usage page
 when a window goes over 85%. Any button
 hands control back for two minutes; `A` turns it off entirely. The lit dot in
 the status bar says which mode it is in — cyan for automatic, warm while you
-have it, white when automatic is off.
+have it, white when automatic is off. The four dots are otherwise the four pages
+in their own colours, so hue says which dot is which page, brightness says which
+one you are on, and the colour of the one you are on says who is choosing it.
 
 It also picks where to rest, off the same fact the brightness carries: the usage
-page while somebody is at the Mac, the clock once nobody is. The two states are
-read by a person doing different things. A dark Mac means nobody is working, and
-the clock is the only thing on this panel still moving; a Mac whose screen has
+page while somebody is at the Mac, the flip clock once nobody is. The two states
+are read by a person doing different things. A dark Mac means nobody is working,
+and the clock is the only thing on this panel still moving; a Mac whose screen has
 just come on means somebody sat down, and what is left of the 5h window is the
 first thing that changes what they do next. So the wake is the panel's cue to
 have the usage figures already up, before anyone asks for them.
