@@ -10,11 +10,13 @@
 #   PostToolUse      -> panel-notify.sh clear    retracts, once you have answered
 #   Stop             -> panel-notify.sh finish   posts, if the turn ran long
 #
-# An alert waits for a button by design, but the thing it was waiting for is you
-# — and once you have answered, the button press is pure chore. Both retracting
+# An alert would wait for a button, but the thing it was waiting for is you —
+# and once you have answered, the button press is pure chore. Both retracting
 # hooks exist because there are two ways to answer: typing a prompt fires
 # UserPromptSubmit, while approving a permission fires nothing at all until the
-# tool it unblocked runs, which is PostToolUse.
+# tool it unblocked runs, which is PostToolUse. And it is posted with a ttl of
+# its own, so an alert nobody answers takes itself down after a minute and hands
+# the screen back rather than holding it for the panel's 10-minute backstop.
 #
 # The far end is tools/mac_stats_server.py in ~/Desktop/T-Display-S3, which
 # holds one message for the panel to poll. Nothing here fails loudly: a banner
@@ -28,6 +30,7 @@ set -u
 PORT=8789
 MIN_SECONDS=60                    # turns shorter than this finish without a word
 BANNER_TTL=20                     # how long a "done" banner stays up
+ALERT_TTL=60                      # how long a "needs you" banner holds the screen
 STAMP_DIR="${TMPDIR:-/tmp}"
 
 # Which session currently has a banner up, or absent for none. Exists so the
@@ -70,10 +73,19 @@ case "${1:-}" in
   alert)
     msg=$(field '.message // ""')
     [ -n "$msg" ] || msg="Claude needs your input"
-    # ttl 0: an alert stays up until it is acknowledged, which is the whole
-    # difference between an alert and a note. What acknowledges it is now
-    # usually you answering, not you reaching over to the panel.
-    post "$msg" alert 0
+    # A minute, not until dismissed. An alert used to hold the screen until
+    # something acknowledged it, on the reasoning that a question worth
+    # interrupting you over is worth staying up — but what actually
+    # acknowledges one is you answering in the terminal, and the retracting
+    # hooks below already catch that within a keystroke. What ttl 0 was
+    # covering is the case where nobody answers, and there the banner is
+    # covering the usage page on a panel that has also stopped choosing its
+    # own pages, to go on asking for an answer that is not coming.
+    #
+    # A minute is long enough to be seen by someone who walked back to the
+    # desk mid-way, and short enough that the panel is a panel again before
+    # you next glance at it.
+    post "$msg" alert "$ALERT_TTL"
     session > "$ALERT_FLAG"
     ;;
 

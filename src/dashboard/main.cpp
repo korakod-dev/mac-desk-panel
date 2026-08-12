@@ -708,6 +708,15 @@ static bool usageTight() {
 // is a staleness clock, and it can turn over between two calls a line apart.
 static uint8_t restPage(bool awake) { return awake ? PAGE_USAGE : PAGE_NOW; }
 
+// Set when something has decided the panel belongs back at its resting page:
+// the Mac crossing between asleep and answering, or a banner that ran out its
+// own ttl with nobody answering it. It lives out here rather than inside
+// autoPickPage() because the second of those is noticed in loop(), a long way
+// from the function that acts on it. Either way it is a request, not a move —
+// it waits for a hold or a banner to be out of the way, and two requests
+// arriving behind one of those collapse into arriving once.
+static bool restWanted = false;
+
 static void autoGoTo(uint8_t want) {
   if (page == want) return;
   if (autoReturn < 0) autoReturn = page;
@@ -724,20 +733,20 @@ static void autoGoTo(uint8_t want) {
 // while a spike that came and went in the meantime has already cleared its own
 // mark and stays quiet.
 //
-// The Mac crossing between asleep and answering waits its turn the same way, and
-// keeps only the latest crossing while it waits: a machine that woke and went
-// back to sleep behind a banner has moved the resting page twice, and only where
-// it ended up is worth arriving on.
+// Arriving back at the resting page waits its turn the same way, and collapses
+// while it waits: a machine that woke and went back to sleep behind a banner has
+// moved the resting page twice, and only where it ended up is worth arriving on.
+// Both things that ask for it — the Mac crossing, and a banner that timed out
+// unanswered — are asking for the same arrival, so two of them are still one.
 static bool autoPickPage() {
   static bool busyShown = false, tightShown = false;
   static int8_t lastAwake = -1;     // -1 until the first reading decides
-  static bool   restMoved = false;  // the resting page changed, not yet shown
 
   bool   awake = macAwake();
   int8_t state = awake ? 1 : 0;
   if (state != lastAwake) {
     lastAwake = state;
-    restMoved = true;
+    restWanted = true;
   }
 
   // Neither alert condition survives the Mac going away: both are made of
@@ -755,15 +764,15 @@ static bool autoPickPage() {
   if (!autoPages || userDriving() || notify.showing) return false;
 
   uint8_t was = page;
-  if (restMoved) {
+  if (restWanted) {
     // Straight to the page rather than through autoGoTo: this is the floor
     // moving, so there is nothing left to come back to, and a return plan made
     // while the Mac was up would drag the panel off the clock after it went.
-    restMoved  = false;
+    restWanted = false;
     autoReturn = -1;
     page = restPage(awake);
-    Serial.printf("[auto] mac %s, resting on page %u\n",
-                  awake ? "awake" : "asleep", page);
+    Serial.printf("[auto] resting on page %u, mac %s\n",
+                  page, awake ? "awake" : "asleep");
   } else if (tight && !tightShown) {
     // Usage wins the tie: a full window stops the work, a busy machine only
     // slows it down.
@@ -1952,14 +1961,23 @@ void loop() {
     if (fetchNotify()) lastDraw = 0;
   }
 
-  // Messages with a ttl take themselves down. An alert has ttl 0 and waits for
-  // a person, which is the point of being an alert — but not forever: nobody
-  // may be coming, and a banner nobody dismisses is a panel stuck on one screen
-  // that has also stopped choosing its own pages. Observed doing exactly that
-  // for six minutes after the question it asked had already been answered.
+  // Messages with a ttl take themselves down. An alert posted without one waits
+  // for a person, which is the point of being an alert — but not forever:
+  // nobody may be coming, and a banner nobody dismisses is a panel stuck on one
+  // screen that has also stopped choosing its own pages. Observed doing exactly
+  // that for six minutes after the question it asked had already been answered.
+  // panel-notify.sh gives its alerts a minute for the same reason.
   uint32_t life = notify.ttl ? notify.ttl : NOTIFY_ALERT_MAX;
   if (notify.showing && millis() - notify.raised > life * 1000UL) {
     notify.showing = false;
+    // It ran out with nobody answering it, so the panel goes back to resting
+    // rather than staying on whatever page the banner happened to be covering.
+    // That page was chosen for a reason that expired with the banner — the
+    // question it interrupted is over, and nobody is standing here to have
+    // wanted this one. A banner taken down by a press is the opposite case and
+    // is left alone below: someone is at the panel, and where they are is
+    // theirs.
+    restWanted = true;
     lastDraw = 0;
   }
 

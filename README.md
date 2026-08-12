@@ -139,7 +139,10 @@ are kept here:
   survive outside a running session, and therefore the only thing
   `usage_server.py` has to read. No cache, no usage page.
 - **`tools/panel-notify.sh`** — wired to four Claude Code hooks; raises and
-  retracts the banner. This is what makes the banner worth having.
+  retracts the banner. This is what makes the banner worth having. Its alerts
+  carry a one-minute `ttl`: the thing they are waiting for is you answering in
+  the terminal, and the retracting hooks catch that within a keystroke, so the
+  only case the banner outlives is the one where nobody is coming.
 
 Copy them to `~/.claude/` and point `settings.json` at them.
 
@@ -155,7 +158,10 @@ curl -sf -X POST localhost:8789/notify -d 'msg=build failed' -d kind=warn -d ttl
 
 `kind` is `info`, `warn` or `alert` and picks the colour. `ttl` is seconds, `0`
 meaning until dismissed — the default for `alert`, which is the difference
-between an alert and a note. Posting an empty message retracts. Posting is
+between an alert and a note. Nothing waits forever even so: a banner with no
+`ttl` of its own is taken down after ten minutes, and one that runs out
+unanswered puts the panel back on its resting page rather than leaving it on
+whatever the banner was covering. Posting an empty message retracts. Posting is
 loopback-only; everything else the server does is read-only and served to the
 subnet.
 
@@ -292,6 +298,12 @@ went, and leaving the clock for it would be old news presented as if it had just
 happened, at exactly the hours the clock is what the panel is for. A crossing
 that lands during a banner or a manual hold waits for it, and if the Mac woke and
 went back to sleep in between, only where it ended up is arrived on.
+
+A banner that times out unanswered arrives at that same resting page, and for
+the same reason the floor exists at all: whatever page it was covering was
+chosen by something that is over, and nobody stayed to want this one. A banner
+you take down with a button is the opposite case and is left alone — someone is
+standing at the panel, and the page they are on is theirs.
 
 It sets its own brightness, and that level says the same thing on the one channel
 you take in without reading anything: 75% of full while readings are still
