@@ -5,7 +5,6 @@ src/fonts/*.vlw
 
 __pycache__/
 .DS_Store
-bridge/probe_output.log
 
 # Per-machine Claude Code permissions, not project configuration.
 .claude/settings.local.json
