@@ -6,9 +6,16 @@ Claude Code hands its status line a `rate_limits` object on every render, and
 
     <5h used %> <5h resets_at> <7d used %> <7d resets_at>
 
-That file is the only place the numbers survive outside a running session, so it
-is what this server reads. Nothing here talks to the API — no token, no network
-call — it just reformats a local file as JSON:
+That file is the only place the numbers survive outside a running session --
+which means it goes stale the moment the terminal closes, even while the
+Claude desktop app keeps reporting the same account's usage on its own.
+desktop_usage_probe.py mirrors that into a second cache, same four-field
+shape but with the resets always 0 (the desktop app's history never carries
+one). Whichever of the two caches was written more recently wins; see
+read_usage().
+
+Nothing here talks to the API — no token, no network call — it just
+reformats local files as JSON:
 
     GET /usage  ->  {"h5": 55, "h5_reset": 1786210200, "h5_stale": false,
                      "d7": 51, "d7_reset": 1786237200, "d7_stale": false,
@@ -33,6 +40,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 CACHE = os.path.expanduser("~/.claude/statusline-usage.cache")
+DESKTOP_CACHE = os.path.expanduser("~/.claude/statusline-usage-desktop.cache")
 
 
 # --- who may ask -------------------------------------------------------------
@@ -86,8 +94,32 @@ def load_token():
     return fresh
 
 
+def parse_cache(path, now):
+    """A cache file's four fields, plus its age in seconds. None if the file
+    is missing, mid-write, or was never written."""
+    try:
+        with open(path) as f:
+            parts = f.read().split()
+        age = max(0, now - int(os.path.getmtime(path)))
+    except OSError:
+        return None
+
+    # Four whitespace-separated integers. Anything else means the file is being
+    # rewritten underneath us or was never written — report "no reading" rather
+    # than a half-parsed one.
+    if len(parts) != 4:
+        return None
+    try:
+        h5, h5r, d7, d7r = (int(p) for p in parts)
+    except ValueError:
+        return None
+
+    return {"h5": h5, "h5_reset": h5r, "d7": d7, "d7_reset": d7r, "age": age}
+
+
 def read_usage():
-    """Parse the cache into a JSON-ready dict. Missing values are reported as -1."""
+    """Parse both caches into a JSON-ready dict, keeping whichever is fresher.
+    Missing values are reported as -1."""
     now = int(time.time())
     out = {
         "h5": -1, "h5_reset": 0, "h5_stale": False,
@@ -95,30 +127,35 @@ def read_usage():
         "age": -1, "now": now,
     }
 
-    try:
-        with open(CACHE) as f:
-            parts = f.read().split()
-        out["age"] = max(0, now - int(os.path.getmtime(CACHE)))
-    except OSError:
+    primary = parse_cache(CACHE, now)
+    desktop = parse_cache(DESKTOP_CACHE, now)
+
+    chosen, other = primary, desktop
+    if desktop is not None and (primary is None or desktop["age"] < primary["age"]):
+        chosen, other = desktop, primary
+    if chosen is None:
         return out
 
-    # Four whitespace-separated integers. Anything else means the file is being
-    # rewritten underneath us or was never written — report "no reading" rather
-    # than a half-parsed one.
-    if len(parts) != 4:
-        return out
-    try:
-        h5, h5r, d7, d7r = (int(p) for p in parts)
-    except ValueError:
-        return out
+    out["age"] = chosen["age"]
 
-    # A reading whose reset time has passed describes a window that is over; the
-    # window after it starts empty, and its reset time is unknown until the next
-    # API response reports one.
-    for pct, reset, key in ((h5, h5r, "h5"), (d7, d7r, "d7")):
+    for key in ("h5", "d7"):
+        pct, reset = chosen[key], chosen[key + "_reset"]
+
+        # The desktop app's history records no reset time, so the fresher
+        # reading routinely arrives without one while the older cache still
+        # holds a usable boundary. A reset is an absolute epoch: one still in
+        # the future describes the window in progress whatever the age of the
+        # file it came from, so it is worth more than no countdown at all.
+        if reset == 0 and other is not None and other[key + "_reset"] > now:
+            reset = other[key + "_reset"]
+
+        # A reading whose reset time has passed describes a window that is over;
+        # the window after it starts empty, and its reset time is unknown until
+        # the next API response reports one.
         if pct >= 0 and 0 < reset <= now:
             pct, reset = 0, 0
             out[key + "_stale"] = True
+
         out[key] = pct
         out[key + "_reset"] = reset
 

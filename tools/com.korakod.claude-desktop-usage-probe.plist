@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Runs tools/desktop_usage_probe.py every 60s so usage_server.py has a second,
+  session-independent reading to fall back to (see its own top comment).
+
+  It runs a *copy* of desktop_usage_probe.py, not the one in this repo.
+  ~/Desktop is a TCC-protected location and a launchd agent is not granted
+  access to it, so an agent pointed straight at tools/desktop_usage_probe.py
+  dies on startup with "Operation not permitted". The ProgramArguments path
+  below is absolute, because launchd expands neither ~ nor $HOME. Change the
+  username in it to yours before installing, or the agent starts and exits
+  with nothing to run.
+
+  Install, and re-install after editing the script:
+
+      mkdir -p ~/Library/Application\ Support/claude-desktop-usage-probe
+      cp tools/desktop_usage_probe.py ~/Library/Application\ Support/claude-desktop-usage-probe/
+      cp tools/com.korakod.claude-desktop-usage-probe.plist ~/Library/LaunchAgents/
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.korakod.claude-desktop-usage-probe.plist
+
+  Reload after replacing the script:
+
+      launchctl kickstart -k gui/$(id -u)/com.korakod.claude-desktop-usage-probe
+
+  To remove:
+
+      launchctl bootout gui/$(id -u)/com.korakod.claude-desktop-usage-probe
+      rm ~/Library/LaunchAgents/com.korakod.claude-desktop-usage-probe.plist
+      rm -r ~/Library/Application\ Support/claude-desktop-usage-probe
+      rm ~/.claude/statusline-usage-desktop.cache
+
+  Runs on the system python -- the script is stdlib only, so it does not need
+  the project's virtualenv and keeps working if .venv is rebuilt. It is a
+  one-shot poller, not a server, so KeepAlive is off and StartInterval alone
+  drives it.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.korakod.claude-desktop-usage-probe</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/korakod/Library/Application Support/claude-desktop-usage-probe/desktop_usage_probe.py</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/claude-desktop-usage-probe.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/claude-desktop-usage-probe.err</string>
+</dict>
+</plist>

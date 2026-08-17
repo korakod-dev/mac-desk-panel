@@ -141,17 +141,19 @@ There is a second environment for bringing up a new board:
 
 ## The host side
 
-Three Python programs, all installed as launch agents. The plists sit beside
+Four Python programs, all installed as launch agents. The plists sit beside
 each script and carry their own install instructions in a comment at the top.
 
 | | port | what it does |
 |---|---|---|
 | `tools/usb_net_bridge.py` | 8788 | Answers the panel's requests over the cable. Needs pyserial; **replaces** `pio device monitor`, since it holds the port. |
 | `tools/usage_server.py` | 8787 | Serves the Claude Code 5h/7d limits. Stdlib only. |
+| `tools/desktop_usage_probe.py` | — | Not a server: every 60s, mirrors the Claude desktop app's own usage reading into a second cache, so `usage_server.py` has something to fall back on once a CLI session ends. Stdlib only. |
 | `tools/mac_stats_server.py` | 8789 | Serves battery, load, memory, disk, which screen is being driven, per-core CPU, and the notification mailbox. Stdlib only. |
 
 The two servers run on the **system** python on purpose — stdlib only, so they
-keep working when the project venv is rebuilt or deleted.
+keep working when the project venv is rebuilt or deleted. Same for the probe,
+which isn't a server but keeps to the rule anyway.
 
 ### Who they answer
 
@@ -187,8 +189,13 @@ are kept here:
 
 - **`tools/statusline.sh`** — the Claude Code status line. It writes
   `~/.claude/statusline-usage.cache`, which is the only place the usage numbers
-  survive outside a running session, and therefore the only thing
-  `usage_server.py` has to read. No cache, no usage page.
+  survive outside a running session — and therefore goes stale the moment the
+  terminal closes, even while the desktop app keeps reporting the same
+  account's usage in the background. `desktop_usage_probe.py` mirrors that
+  into `~/.claude/statusline-usage-desktop.cache`, same four-field shape but
+  with the resets always `0` since the desktop app's own history never
+  records one. `usage_server.py` reads both and keeps whichever was written
+  more recently. No cache at all, and the usage page shows nothing.
 - **`tools/panel-notify.sh`** — wired to four Claude Code hooks; raises and
   retracts the banner. This is what makes the banner worth having. Its alerts
   carry a one-minute `ttl`: the thing they are waiting for is you answering in
