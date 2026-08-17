@@ -200,10 +200,34 @@ Two details that are not obvious and were both bugs first:
 The probe backdates its cache's mtime to when the desktop app took the reading,
 not when the probe ran, so the `age` the panel shows is honest.
 
-Worth knowing what this still cannot see: the desktop app only samples while it
-is running, so with both it and Claude Code closed the number ages rather than
-updates. That is what `age` is for — the panel says how old the reading is
-rather than implying it is live.
+**The reading is a floor, not a live figure, and `age` is how far back it was
+taken.** The desktop app records a sample roughly every fifteen minutes — more
+often while you are actually chatting in it, since readings ride along with its
+own traffic, and at the flat fifteen when it is only sitting open. So the panel
+trails the true number for as long as you are working. Measured on an ordinary
+morning:
+
+```
+  08:50   14%
+  09:05   17%      +3
+  09:20   21%      +4
+```
+
+At that rate an eight-minute-old sample is two or three percent behind, which is
+the whole of the gap and not a bug to go looking for. Polling the probe harder
+does nothing about it: it re-reads a file that has not changed. The ceiling is
+the app's own cadence.
+
+There is no fresher source on the machine to switch to — the app's HTTP cache
+holds responses with the right fields but they are days old, its Local Storage
+and IndexedDB carry none, and Claude Code's session transcripts do not record
+rate limits either. The only way to a number with no lag is calling the API with
+a token, which is the one thing this deliberately does not do.
+
+With the app and Claude Code both closed nothing samples at all, and the reading
+ages rather than updates. Same answer either way: the panel says how old the
+number is rather than implying it is live, and the age goes warm once it is old
+enough to be worth distrusting.
 
 ### Who they answer
 
