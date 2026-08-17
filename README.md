@@ -11,9 +11,9 @@ there as a fallback, not a requirement.
 
 | | |
 |---|---|
-| ![the flip clock](docs/pages/1-flip.png) | ![Claude Code usage](docs/pages/3-usage.png) |
+| ![the flip clock](docs/pages/1-flip.png) | ![Claude Code usage](docs/pages/2-usage.png) |
 | **flip** — a split-flap clock, and how warm it is | **usage** — the 5h and 7d windows, and when they roll |
-| ![Mac vitals and cores](docs/pages/4-mac.png) | ![the panel's own vitals](docs/pages/5-vitals.png) |
+| ![Mac vitals and cores](docs/pages/3-mac.png) | ![the panel's own vitals](docs/pages/4-vitals.png) |
 | **mac** — charge, screen, memory, disk, a column per core | **vitals** — not a page: hold `IO14` for the panel's own |
 
 `IO14` moves to the next page, and held, brings up the panel's own vitals over
@@ -26,10 +26,12 @@ for keeping it was that **flip** is what the panel rests on once the Mac's
 screens go dark, and a page that has to be legible from the doorway at a
 quarter brightness cannot also be the one holding a line of forecast in 16px
 type. That argument was for the *reading*; it was never one for the *page*.
-Two of the three pages in the cycle opened on the same four digits, which is
-what you actually see pressing `IO14`. So it is gone, and what it alone
+Half the cycle opened on the same clock, which is what you actually see
+pressing `IO14`. So it is gone, and the cycle is three. What that page alone
 carried went with it: the seconds, the spelled-out date, the conditions text
-and the place name. The status bar still dates the panel, abbreviated.
+and the place name. The status bar still dates the panel, abbreviated, and the
+temperature with feels-like is still under the flip clock — nothing that
+answers a first question was on that page by itself.
 
 A card that changes folds rather than simply becoming the new digit — the old
 one down over the fresh half waiting underneath, then the new lower half up out
@@ -151,10 +153,65 @@ The two servers run on the **system** python on purpose — stdlib only, so they
 keep working when the project venv is rebuilt or deleted. Same for the probe,
 which isn't a server but keeps to the rule anyway.
 
+### Where the usage numbers come from
+
+Nothing here calls the API. Both sources are files something else on this
+machine already writes, and the server just picks between them.
+
+```
+  a Claude Code session              the Claude desktop app
+  (a terminal, live)                 (running in the background)
+          │                                    │
+          │ statusline.sh, on every render     │ polls its own plan usage,
+          ▼                                    ▼ roughly every 15 min
+  ~/.claude/                         ~/Library/Application Support/Claude/
+    statusline-usage.cache             plan-usage-history.json
+    5h%  reset  7d%  reset             {"u":{"fh":6,"sd":2}}, per org
+          │                                    │
+          │                                    │ desktop_usage_probe.py, 60s
+          │                                    ▼
+          │                          ~/.claude/
+          │                            statusline-usage-desktop.cache
+          │                            5h%  0  7d%  0
+          │                                    │
+          └────────────────┬───────────────────┘
+                           ▼
+                   usage_server.py  :8787  ──→  the panel
+```
+
+The **fresher of the two wins**, which lands the right way round on its own: a
+live session rewrites its cache every render, so it beats a desktop reading that
+is minutes old, and the moment the terminal closes the desktop one takes over
+instead of the panel freezing on whatever the session last left behind.
+
+Two details that are not obvious and were both bugs first:
+
+- **The samples name their org, and an account can have more than one.** This
+  machine's history carries thousands for the org actually in use and a single
+  stray from another, reading 0%/0%. Taking simply the newest sample serves that
+  zero for as long as it happens to be last — a panel confidently reporting an
+  empty quota against a window nowhere near it. The org with the most samples is
+  the one taken.
+- **The desktop history records no reset time**, so the countdown disappeared
+  whenever that source won. A reset is an absolute epoch, so one still in the
+  future describes the window in progress however old the file it came from; a
+  missing reset is borrowed from the other cache when it has not passed yet.
+
+The probe backdates its cache's mtime to when the desktop app took the reading,
+not when the probe ran, so the `age` the panel shows is honest.
+
+Worth knowing what this still cannot see: the desktop app only samples while it
+is running, so with both it and Claude Code closed the number ages rather than
+updates. That is what `age` is for — the panel says how old the reading is
+rather than implying it is live.
+
 ### Who they answer
 
-Both bind all interfaces, because the panel's WiFi fallback needs to reach them
-from the LAN. What that used to mean is that anything else on the network could
+This is about the two servers. The bridge listens on loopback only, and the
+probe listens on nothing at all — it writes a file and exits.
+
+Both servers bind all interfaces, because the panel's WiFi fallback needs to
+reach them from the LAN. What that used to mean is that anything else on the network could
 read them too — including `/notify`, whose text names project directories and
 whatever Claude stopped to ask about.
 
@@ -173,10 +230,12 @@ It is a shared secret over plain HTTP, so it is no defence against someone
 reading the traffic, and is not meant to be. It stops the network being able to
 just read the port.
 
-They each run a *copy* of their script, from `~/Library/Application Support/`,
+All four run a *copy* of their script, from `~/Library/Application Support/`,
 because `~/Desktop` is TCC-protected and a launch agent pointed straight at it
-dies on startup with "Operation not permitted". **After editing a server, copy
-it across and kick the agent** — the plist comments give the exact commands.
+dies on startup with "Operation not permitted". **After editing one, copy it
+across and kick the agent** — the plist comments give the exact commands. The
+copy is what actually runs, so an edit left in the repo changes nothing and
+looks exactly like a fix that did not work.
 
 ### The two scripts that live in ~/.claude
 
@@ -271,7 +330,7 @@ The firmware takes single-byte commands on the console, and
 of it — as a PNG:
 
 ```bash
-.venv/bin/python tools/grab_screen.py shot 4      # capture all four pages
+.venv/bin/python tools/grab_screen.py shot 3      # capture all three pages
 ```
 
 It captures from wherever the panel is rather than from the first page, so which
@@ -340,9 +399,10 @@ machine's load passes three quarters of its core count, and to the usage page
 when a window goes over 85%. Any button
 hands control back for two minutes; `A` turns it off entirely. The lit dot in
 the status bar says which mode it is in — cyan for automatic, warm while you
-have it, white when automatic is off. The four dots are otherwise the four pages
-in their own colours, so hue says which dot is which page, brightness says which
-one you are on, and the colour of the one you are on says who is choosing it.
+have it, white when automatic is off. The three dots are otherwise the three
+pages in their own colours, so hue says which dot is which page, brightness says
+which one you are on, and the colour of the one you are on says who is choosing
+it.
 
 It also picks where to rest, off the same fact the brightness carries: the usage
 page while somebody is at the Mac, the flip clock once nobody is. The two states
