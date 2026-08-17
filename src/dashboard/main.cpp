@@ -269,32 +269,6 @@ struct Weather {
 
 Weather weather;
 
-// WMO weather interpretation codes, grouped the way a forecast would read.
-static const char *wmoText(int code) {
-  switch (code) {
-    case 0:  return "Clear sky";
-    case 1:  return "Mainly clear";
-    case 2:  return "Partly cloudy";
-    case 3:  return "Overcast";
-    case 45: case 48: return "Fog";
-    case 51: case 53: case 55: return "Drizzle";
-    case 56: case 57: return "Freezing drizzle";
-    case 61: return "Slight rain";
-    case 63: return "Moderate rain";
-    case 65: return "Heavy rain";
-    case 66: case 67: return "Freezing rain";
-    case 71: case 73: case 75: return "Snow";
-    case 77: return "Snow grains";
-    case 80: return "Light showers";
-    case 81: return "Showers";
-    case 82: return "Violent showers";
-    case 85: case 86: return "Snow showers";
-    case 95: return "Thunderstorm";
-    case 96: case 99: return "Thunderstorm, hail";
-    default: return "Unknown";
-  }
-}
-
 static uint16_t tempColor(float t) {
   if (t >= 35) return C_ERR;
   if (t >= 30) return C_WARM;
@@ -724,8 +698,8 @@ static float batteryVolts() {
 // resting page below sends it there whenever the Mac goes dark, and a cycle that
 // starts where it comes to rest is one you leave and come back to rather than
 // one you go round.
-enum Page : uint8_t { PAGE_FLIP, PAGE_NOW, PAGE_USAGE, PAGE_MAC };
-static const uint8_t PAGE_COUNT = 4;
+enum Page : uint8_t { PAGE_FLIP, PAGE_USAGE, PAGE_MAC };
+static const uint8_t PAGE_COUNT = 3;
 
 static uint8_t page = PAGE_FLIP;
 
@@ -1131,7 +1105,7 @@ static void drawStatusBar(const struct tm *now, bool timeValid) {
   //
   // The lit one keeps its second job: cyan when the panel may pick the page
   // itself, warm while a button press has it holding off, white when automatic
-  // selection is switched off for good. Three signals in four dots, and they do
+  // selection is switched off for good. Three signals in three dots, and they do
   // not collide — hue says which page each dot is, brightness says which one you
   // are on, and the colour of the one you are on says who is choosing.
   uint16_t live = !autoPages ? C_TEXT : userDriving() ? C_WARM : C_ACCENT;
@@ -1466,176 +1440,7 @@ static void pageFlip(const struct tm *now, bool timeValid) {
   flipWeather(133);
 }
 
-// --- page 2: the time, the day, and how warm it is --------------------------
-//
-// The clock and the weather were separate pages. Merged, they keep only what is
-// worth a glance — time, date, temperature, and the two lines of forecast that
-// change what you wear. Place, apparent temperature, humidity and wind went
-// with the page they were on, and are no longer fetched.
-//
-// The geometry here is measured, not guessed: at the big face "09:44" is 165px
-// and a temperature carrying its tenth is 149px, which together overflow the
-// 304px between the margins. Rounding the temperature to the degree is what
-// makes the two fit on one line — and it is the figure you actually read from
-// across a room.
-//
-// The four digits are the ramp, in the order the flip clock's cards are in: the
-// hour teal and blue, the minutes violet and magenta. This is the same reading
-// as the cards one press to the left, and the colours are what say so — the page
-// changes, the palette does not. Everything below them sits on one card in the
-// ramp's blue, which is the other half of the same idea: the two clock pages
-// should look like two views of one thing rather than two pages that happen to
-// both carry a time.
-
-// A string drawn a glyph at a time, so that each one can take its own colour.
-//
-// Identical to what drawString would have put down. TFT_eSPI advances the cursor
-// by gxAdvance per glyph and draws at cursor + gdX, so stepping by the advance by
-// hand lands every character exactly where the whole string would have — which
-// also means the group's extent is still textWidth's to report, and the layout
-// around it does not have to change.
-//
-// The advances are measured off the loaded face rather than written down.
-// textWidth gives the last glyph of a string its ink extent and every other one
-// its advance, so the difference between a pair and a single is the advance of
-// the character in front. That holds for any face make_vlw.py produces, and the
-// digits in all of them are tabular — every one the same width — so one
-// measurement does for all ten.
-static void drawTinted(const char *s, int16_t x, int16_t y, const uint16_t *hues,
-                       int hueCount, uint16_t other) {
-  const int16_t advD = fb.textWidth("00") - fb.textWidth("0");
-  const int16_t advC = fb.textWidth("0:0") - fb.textWidth("00");
-
-  fb.setTextDatum(ML_DATUM);
-  int n = 0;
-  for (const char *p = s; *p; p++) {
-    const bool digit = *p >= '0' && *p <= '9';
-    const char one[2] = {*p, 0};
-
-    fb.setTextColor(digit && n < hueCount ? hues[n] : other, C_BG);
-    fb.drawString(one, x, y);
-
-    x += digit ? advD : advC;
-    if (digit) n++;
-  }
-}
-
-static void pageNow(const struct tm *now, bool timeValid) {
-  // Drawn first because it is right-aligned: the seconds beside the clock need
-  // to know where the temperature starts before they can claim their space.
-  int16_t tempLeft = SCR_W;
-  if (weather.valid) {
-    String t = String((int)lroundf(weather.temp)) + "°";
-    useFont(BigFont64);
-    fb.setTextDatum(MR_DATUM);
-    fb.setTextColor(tempColor(weather.temp), C_BG);
-    fb.drawString(t, SCR_W - 8, 60);
-    tempLeft = SCR_W - 8 - fb.textWidth(t);
-  }
-
-  char hhmm[6] = "--:--";
-  if (timeValid) strftime(hhmm, sizeof(hhmm), "%H:%M", now);
-
-  useFont(BigFont64);
-  if (timeValid) {
-    // The colon softens on the odd second and comes back on the even, which is
-    // the flip page's answer to "is this thing still running" borrowed for this
-    // one. The seconds beside it say the same thing in figures — and give the
-    // room up to the temperature whenever it needs it, which is when this is the
-    // only thing left saying it.
-    drawTinted(hhmm, 8, 60, C_FLIP, 4, (now->tm_sec & 1) ? C_DIM : C_TEXT);
-  } else {
-    fb.setTextDatum(ML_DATUM);
-    fb.setTextColor(C_DIM, C_BG);
-    fb.drawString(hhmm, 8, 60);
-  }
-  int16_t timeEnd = 8 + fb.textWidth(hhmm);
-
-  // Seconds are the one thing here that is not essential; they earn their place
-  // by showing the panel is alive, and give it up when the temperature is wide
-  // enough to need the room.
-  if (timeValid) {
-    char ss[4];
-    strftime(ss, sizeof(ss), "%S", now);
-    useFont(UiFont16);
-    if (timeEnd + 8 + fb.textWidth(ss) < tempLeft - 8) {
-      fb.setTextDatum(ML_DATUM);
-      fb.setTextColor(C_TEAL, C_BG);
-      fb.drawString(ss, timeEnd + 8, 74);
-    }
-  }
-
-  // Everything under the clock, on one card. The four fields down here are all
-  // second questions — what it feels like, what the sky is doing, what day it
-  // is, where the reading is from — and grouping them says so, where four lines
-  // loose on the background read as four more things competing with the time.
-  const int16_t PY = 94, PH = 56;
-  const int16_t TX = CARD_X + CARD_PAD, TR = CARD_X + CARD_W - CARD_PAD;
-  const int16_t R1 = PY + 16, R2 = PY + 38;
-  panelCard(CARD_X, PY, CARD_W, PH, C_BLUE);
-
-  // Middle line: what it feels like on the left, the conditions on the right.
-  useFont(UiFont16);
-  if (weather.valid) {
-    // The label is a chip and the figure carries the colour: when the air is
-    // 31° and it feels like 38°, that gap is the whole point of the line, and
-    // the chip is what keeps the words out of the way of it.
-    int16_t x = chip(TX, R1, "Feels like", C_TEAL) + 8;
-
-    fb.setTextDatum(ML_DATUM);
-    fb.setTextColor(tempColor(weather.feels));
-    fb.drawString(String((int)lroundf(weather.feels)) + "°", x, R1);
-
-    fb.setTextDatum(MR_DATUM);
-    fb.setTextColor(C_VIOLET);
-    fb.drawString(wmoText(weather.code), TR, R1);
-  } else {
-    fb.setTextDatum(MR_DATUM);
-    fb.setTextColor(C_ERR);
-    fb.drawString(weather.error.length() ? weather.error : String("loading..."),
-                  TR, R1);
-  }
-
-  // Bottom line: the date on the left, spelled out — the status bar only has
-  // room to abbreviate it, and never carries the year.
-  char date[48];
-  if (timeValid) {
-    char wd[16], mon[16];
-    strftime(wd, sizeof(wd), "%A", now);
-    strftime(mon, sizeof(mon), "%B", now);
-    // Built by hand rather than with %d, which pads single-digit days with a zero.
-    snprintf(date, sizeof(date), "%s %d %s %d", wd, now->tm_mday, mon,
-             now->tm_year + 1900);
-  } else {
-    snprintf(date, sizeof(date), "%s",
-             net::online() ? "syncing the clock..." : "no network link");
-  }
-  fb.setTextDatum(ML_DATUM);
-  fb.setTextColor(C_TEXT);
-  fb.drawString(date, TX, R2);
-
-  // Opposite it, the place the reading is for — giving way to the reading's age
-  // once that stops being fresh. The place is fixed configuration you already
-  // know; a forecast refreshed every ten minutes going half an hour without one
-  // is the part worth the space. Drawn only if the date leaves room, since the
-  // longest weekday and month together run most of the way across.
-  String corner = WEATHER_PLACE;
-  uint16_t cornerCol = C_MAGENTA;
-  if (weather.valid) {
-    uint32_t stale = (millis() - weather.fetched) / 60000;
-    if (stale >= 30) {
-      corner = String(stale) + "m ago";
-      cornerCol = C_WARM;
-    }
-  }
-  if (TX + fb.textWidth(date) + 10 < TR - fb.textWidth(corner)) {
-    fb.setTextDatum(MR_DATUM);
-    fb.setTextColor(cornerCol);
-    fb.drawString(corner, TR, R2);
-  }
-}
-
-// --- page 3: Claude Code usage ----------------------------------------------
+// --- page 2: Claude Code usage ----------------------------------------------
 
 // Cool-to-hot ramp across a filled bar, matching the status line in the
 // terminal: green while there is room, red as the window fills.
@@ -1840,7 +1645,7 @@ static void drawVitals() {
   fb.drawFastVLine(x + w / 2, y + 24, h - 34, shade(C_BLUE, 50));
 }
 
-// --- page 4: the Mac at the other end of the cable ---------------------------
+// --- page 3: the Mac at the other end of the cable ---------------------------
 //
 // The vitals and the per-core bars were two pages, and the seam between them was
 // never real: both come out of mac_stats_server on the same host, and the "Load
@@ -2200,7 +2005,6 @@ static void render() {
 
   switch (page) {
     case PAGE_FLIP:   pageFlip(&now, timeValid); break;
-    case PAGE_NOW:    pageNow(&now, timeValid);  break;
     case PAGE_USAGE:  pageUsage(raw, timeValid); break;
     case PAGE_MAC:    pageMac();                 break;
   }
@@ -2407,7 +2211,7 @@ void loop() {
     // both of its timers: the vitals are on a ten-second poll, and the cores
     // being on a one-second one is no reason to make the press mean half a page.
     // Both clock pages are fed by the same forecast, so both hurry the same one.
-    if (page == PAGE_NOW || page == PAGE_FLIP) lastWeather = 0;
+    if (page == PAGE_FLIP) lastWeather = 0;
     else if (page == PAGE_USAGE) lastUsage = 0;
     else if (page == PAGE_MAC)   lastMac = lastCpu = 0;
     lastDraw = 0;

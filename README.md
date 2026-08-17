@@ -11,25 +11,25 @@ there as a fallback, not a requirement.
 
 | | |
 |---|---|
-| ![the flip clock](docs/pages/1-flip.png) | ![clock and weather](docs/pages/2-now.png) |
-| **flip** — a split-flap clock, and how warm it is | **now** — time, date, temperature, conditions |
-| ![Claude Code usage](docs/pages/3-usage.png) | ![Mac vitals and cores](docs/pages/4-mac.png) |
-| **usage** — the 5h and 7d windows, and when they roll | **mac** — charge, screen, memory, disk, a column per core |
-| ![the panel's own vitals](docs/pages/5-vitals.png) | |
-| **vitals** — not a page: hold `IO14` for the panel's own | |
+| ![the flip clock](docs/pages/1-flip.png) | ![Claude Code usage](docs/pages/3-usage.png) |
+| **flip** — a split-flap clock, and how warm it is | **usage** — the 5h and 7d windows, and when they roll |
+| ![Mac vitals and cores](docs/pages/4-mac.png) | ![the panel's own vitals](docs/pages/5-vitals.png) |
+| **mac** — charge, screen, memory, disk, a column per core | **vitals** — not a page: hold `IO14` for the panel's own |
 
 `IO14` moves to the next page, and held, brings up the panel's own vitals over
 whatever is showing. `BOOT` refreshes the page in front of you, and held, dims
 or brightens the panel.
 
-The two clock pages are not a duplicate. **flip** is what the panel comes to
-rest on once the Mac's screens go dark, and the hours it spends there are the
-hours nobody is reading anything: what a page has to do at a quarter brightness
-from the far side of a dark room is be legible from the doorway, which four
-cards 88px tall manage and a date, a place and a line of forecast in 16px type
-do not. It carries the temperature and what it feels like underneath, at a size
-you have to come closer for, because that is the second question and not the
-first. Everything it leaves out, **now** still has, one press to the right.
+There was a second clock page — **now**, carrying the time again in a 64px
+face with the full date, the conditions and the place beside it. The argument
+for keeping it was that **flip** is what the panel rests on once the Mac's
+screens go dark, and a page that has to be legible from the doorway at a
+quarter brightness cannot also be the one holding a line of forecast in 16px
+type. That argument was for the *reading*; it was never one for the *page*.
+Two of the three pages in the cycle opened on the same four digits, which is
+what you actually see pressing `IO14`. So it is gone, and what it alone
+carried went with it: the seconds, the spelled-out date, the conditions text
+and the place name. The status bar still dates the panel, abbreviated.
 
 A card that changes folds rather than simply becoming the new digit — the old
 one down over the fresh half waiting underneath, then the new lower half up out
@@ -72,10 +72,6 @@ also how the clock's own digits sit on their cards. Text on a card is drawn
 transparent, blended against whatever is under it, which is what lets a string
 cross the seam in the middle of a card without being boxed in the wrong half's
 shade.
-
-The clock on the **now** page is drawn a glyph at a time so its four digits can
-take the ramp in the order the cards do. It is the same reading as the page to
-its left and the colours are what say so.
 
 ## How the pieces fit
 
