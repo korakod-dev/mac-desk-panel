@@ -145,7 +145,7 @@ each script and carry their own install instructions in a comment at the top.
 | | port | what it does |
 |---|---|---|
 | `tools/usb_net_bridge.py` | 8788 | Answers the panel's requests over the cable. Needs pyserial; **replaces** `pio device monitor`, since it holds the port. |
-| `tools/usage_server.py` | 8787 | Serves the Claude Code 5h/7d limits. Stdlib only. |
+| `tools/usage_server.py` | 8787 | Serves the 5h/7d limits, out of two local files — and out of the API itself while the panel is showing that page. Stdlib only. |
 | `tools/desktop_usage_probe.py` | — | Not a server: every 60s, mirrors the Claude desktop app's own usage reading into a second cache, so `usage_server.py` has something to fall back on once a CLI session ends. Stdlib only. |
 | `tools/mac_stats_server.py` | 8789 | Serves battery, load, memory, disk, which screen is being driven, per-core CPU, and the notification mailbox. Stdlib only. |
 
@@ -155,8 +155,9 @@ which isn't a server but keeps to the rule anyway.
 
 ### Where the usage numbers come from
 
-Nothing here calls the API. Both sources are files something else on this
-machine already writes, and the server just picks between them.
+Three sources. Two are files something else on this machine already writes and
+the server picks between them; the third is the API, asked directly, and only
+while the usage page is the page in front of you.
 
 ```
   a Claude Code session              the Claude desktop app
@@ -177,12 +178,18 @@ machine already writes, and the server just picks between them.
           └────────────────┬───────────────────┘
                            ▼
                    usage_server.py  :8787  ──→  the panel
+                           │                     ▲
+                           │  /usage?live=1      │  only from the usage page
+                           ▼
+            api.anthropic.com/api/oauth/usage, Claude Code's own token
 ```
 
-The **fresher of the two wins**, which lands the right way round on its own: a
-live session rewrites its cache every render, so it beats a desktop reading that
-is minutes old, and the moment the terminal closes the desktop one takes over
-instead of the panel freezing on whatever the session last left behind.
+The **fresher of the two files wins**, which lands the right way round on its
+own: a live session rewrites its cache every render, so it beats a desktop
+reading that is minutes old, and the moment the terminal closes the desktop one
+takes over instead of the panel freezing on whatever the session last left
+behind. A live reading, when there is one, beats both — it is seconds old and
+it is the only source that states both reset times itself.
 
 Two details that are not obvious and were both bugs first:
 
@@ -191,7 +198,8 @@ Two details that are not obvious and were both bugs first:
   stray from another, reading 0%/0%. Taking simply the newest sample serves that
   zero for as long as it happens to be last — a panel confidently reporting an
   empty quota against a window nowhere near it. The org with the most samples is
-  the one taken.
+  the one taken, by the probe and by the live path, which needs the same answer
+  to know which organisation to ask about.
 - **The desktop history records no reset time**, so the countdown disappeared
   whenever that source won. A reset is an absolute epoch, so one still in the
   future describes the window in progress however old the file it came from; a
@@ -200,12 +208,10 @@ Two details that are not obvious and were both bugs first:
 The probe backdates its cache's mtime to when the desktop app took the reading,
 not when the probe ran, so the `age` the panel shows is honest.
 
-**The reading is a floor, not a live figure, and `age` is how far back it was
-taken.** The desktop app records a sample roughly every fifteen minutes — more
-often while you are actually chatting in it, since readings ride along with its
-own traffic, and at the flat fifteen when it is only sitting open. So the panel
-trails the true number for as long as you are working. Measured on an ordinary
-morning:
+**Off the usage page, the reading is a floor and `age` is how far back it was
+taken.** The desktop app records a sample roughly every fifteen minutes. So the
+files trail the true number for as long as you are working. Measured on an
+ordinary morning:
 
 ```
   08:50   14%
@@ -213,21 +219,76 @@ morning:
   09:20   21%      +4
 ```
 
-At that rate an eight-minute-old sample is two or three percent behind, which is
-the whole of the gap and not a bug to go looking for. Polling the probe harder
-does nothing about it: it re-reads a file that has not changed. The ceiling is
-the app's own cadence.
+At that rate an eight-minute-old sample is two or three percent behind. Polling
+the probe harder does nothing about it: it re-reads a file that has not changed,
+and the app's own HTTP cache — which does hold a full response, reset times and
+all — is rewritten by that same poll and no fresher. The ceiling is the app's
+cadence, and there is nothing on the machine to switch to that beats it: its
+Local Storage and IndexedDB carry no usage, and Claude Code's transcripts do
+not record rate limits either.
 
-There is no fresher source on the machine to switch to — the app's HTTP cache
-holds responses with the right fields but they are days old, its Local Storage
-and IndexedDB carry none, and Claude Code's session transcripts do not record
-rate limits either. The only way to a number with no lag is calling the API with
-a token, which is the one thing this deliberately does not do.
+With the app and Claude Code both closed nothing samples at all, and the files
+age rather than update. The panel says how old the number is rather than
+implying it is live, and the age goes warm once it is old enough to be worth
+distrusting.
 
-With the app and Claude Code both closed nothing samples at all, and the reading
-ages rather than updates. Same answer either way: the panel says how old the
-number is rather than implying it is live, and the age goes warm once it is old
-enough to be worth distrusting.
+### The live reading
+
+The number with no lag in it is the one the API will state on being asked, so
+the server asks — the endpoint Claude Code's own `/usage` command calls:
+
+```
+GET https://api.anthropic.com/api/oauth/usage      Authorization: Bearer …
+{"five_hour": {"utilization": 37.0, "resets_at": "…"}, "seven_day": {…}}
+```
+
+The credential is the one Claude Code itself signed in with. That endpoint
+wants a token scoped `user:profile`; the long-lived kind `claude setup-token`
+mints is scoped for inference alone and is turned away with a scope error, so
+the one token on the machine that works is the CLI's own — which is why `/usage`
+works there. On macOS it is in the login keychain as **Claude Code-credentials**,
+and reading it needs the keychain's permission the first time (the plist beside
+the server says how to answer that once). Where there is no keychain the CLI
+keeps it at `~/.claude/.credentials.json`, read instead. The server never writes
+or refreshes it — the CLI does that whenever it runs, and this reads whatever is
+current; an access token expired with no session since to renew it is just one
+more way the live reading is off.
+
+The request carries `anthropic-beta: oauth-2025-04-20`, the header that has the
+API read a Bearer as an OAuth token rather than an API key — a documented flag,
+not a disguise.
+
+Two roads not taken, and why. **`claude setup-token`** is the obvious one, but
+its token is inference-scoped and this endpoint refuses it. **The desktop app's
+session cookie** was the first: it polls `claude.ai/api/organizations/<org>/usage`
+with a cookie kept in its own encrypted store, readable on this machine — but
+claude.ai sits behind Cloudflare, which refuses anything that does not look like
+a browser, and getting through means sending the app's user agent and the
+clearance cookies minted against it. That is a program claiming to be another
+program to pass a control built to stop exactly that, so it is not here. The
+CLI's token needs none of it and goes to a host meant for programs.
+
+It is a credential, so it is fenced:
+
+- **Only from the page.** The panel sets `?live=1` only while the usage page is
+  what is on screen — not behind the vitals overlay, not from the other two
+  pages. Off it the same request is answered from the files, as before. The
+  panel still polls from every page, because whether to raise this page at all
+  is decided from that reading.
+- **At most one call every 25 seconds**, and one that fails stands back for two
+  minutes rather than retrying on every poll.
+- **Every failure falls back to the files.** No credential, an expired token,
+  no network, a changed endpoint: the panel shows what it showed before,
+  seventeen minutes old and saying so. The live path can be entirely broken
+  without the page being.
+
+Arriving on the page asks immediately rather than waiting out the poll interval,
+and the age in the corner reads `live` instead of counting seconds — it is the
+page being open that makes it live, and it stops being that when you leave.
+
+One thing it is not: a documented API. `/api/oauth/usage` is what the CLI
+happens to call, and it can change or start refusing without notice. That is
+what the fallback is for.
 
 ### Who they answer
 

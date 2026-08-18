@@ -339,6 +339,9 @@ static String hostUrl(int port, const char *path) {
 // the busy machine the core columns exist to show.
 static const uint32_t HOST_TIMEOUT = 2000;
 
+// The one request the host cannot answer out of memory: see fetchUsage().
+static const uint32_t USAGE_LIVE_TIMEOUT = 2500;
+
 // --- Claude Code usage limits -----------------------------------------------
 
 struct Usage {
@@ -348,6 +351,7 @@ struct Usage {
   int      d7      = -1;      // percent of the 7-day window used
   time_t   d7reset = 0;
   int      age     = -1;      // cache age in seconds, as reported at `fetched`
+  bool     live    = false;   // the host asked the API for this one
   uint32_t fetched = 0;
   String   error;
 };
@@ -362,15 +366,27 @@ static int usageAgeNow() {
   return usage.age + (int)((millis() - usage.fetched) / 1000);
 }
 
-static bool fetchUsage() {
+// The host serves this out of two files that something else writes on its own
+// schedule, and the slower of them -- the desktop app's, the one that answers
+// whenever no Claude Code session is running -- is refreshed about every
+// fifteen minutes. `live` asks it to go and ask the API instead, which is
+// the only reading with no lag in it. That costs a request off this machine,
+// so it is asked for only while the usage page is the page on screen, and the
+// host falls back to the files whenever it cannot be had.
+static bool fetchUsage(bool live) {
   if (!net::online()) {
     usage.error = "not connected";
     return false;
   }
 
   String payload;
-  if (!net::get(hostUrl(USAGE_PORT, "/usage"), payload, usage.error,
-                HOST_TIMEOUT, HOST_TOKEN)) {
+  // Longer than the others because this one can wait on the host waiting on
+  // the API. The host gives up at 1.5s, so this is that plus the round trip;
+  // a slow answer then costs a still panel for a moment rather than a poll
+  // thrown away after two seconds of waiting for it.
+  if (!net::get(hostUrl(USAGE_PORT, live ? "/usage?live=1" : "/usage"), payload,
+                usage.error, live ? USAGE_LIVE_TIMEOUT : HOST_TIMEOUT,
+                HOST_TOKEN)) {
     return false;
   }
 
@@ -386,12 +402,13 @@ static bool fetchUsage() {
   usage.d7      = doc["d7"]       | -1;
   usage.d7reset = doc["d7_reset"] | 0;
   usage.age     = doc["age"]      | -1;
+  usage.live    = doc["live"]     | false;
 
   usage.valid   = usage.h5 >= 0 || usage.d7 >= 0;
   usage.fetched = millis();
   usage.error   = usage.valid ? "" : "no reading yet";
-  Serial.printf("[usage] 5h=%d%% 7d=%d%% age=%ds\n", usage.h5, usage.d7,
-                usage.age);
+  Serial.printf("[usage] 5h=%d%% 7d=%d%% age=%ds%s\n", usage.h5, usage.d7,
+                usage.age, usage.live ? " live" : "");
   return usage.valid;
 }
 
@@ -1564,11 +1581,16 @@ static void pageUsage(time_t now, bool timeValid) {
     return;
   }
 
-  // How old the reading is matters as much as the reading: the cache only moves
-  // when Claude Code renders its status line, so a quiet hour leaves it stale.
+  // How old the reading is matters as much as the reading: the files behind it
+  // only move when something else writes them, so a quiet hour leaves it
+  // stale. One the host went and asked for says so instead of counting the
+  // seconds since — it is this page being open that makes it live, and it
+  // stops being that the moment you leave.
   int age = usageAgeNow();
   if (age >= 0) {
-    String label = age < 90 ? String(age) + "s ago" : String(age / 60) + "m ago";
+    String label = usage.live ? String("live")
+                              : (age < 90 ? String(age) + "s ago"
+                                          : String(age / 60) + "m ago");
     fb.setTextDatum(MR_DATUM);
     fb.setTextColor(age > 900 ? C_WARM : C_DIM, C_BG);
     fb.drawString(label, SCR_W - 8, BODY_TOP + 10);
@@ -2280,11 +2302,23 @@ void loop() {
   }
 
   // The cache moves every time Claude Code renders its status line, so poll
-  // often — it is one small request to a machine on the same subnet.
+  // often — it is one small request to a machine on the same subnet. It is
+  // also what decides whether the panel raises this page on its own, so it is
+  // polled from every page and not only from this one.
+  //
+  // What is only asked for from this page is the live reading: off it the host
+  // answers out of its files, which is the request this always was. Arriving
+  // asks again immediately rather than waiting out the interval, since the
+  // point of the live one is not being from before you looked.
+  bool showingUsage = page == PAGE_USAGE && !vitalsUp;
+  static bool wasShowingUsage = false;
+  if (showingUsage && !wasShowingUsage) lastUsage = 0;
+  wasShowingUsage = showingUsage;
+
   uint32_t usageAge = millis() - lastUsage;
   if (online && (lastUsage == 0 || usageAge > (usage.valid ? 30000UL : 15000UL))) {
     lastUsage = millis();
-    fetchUsage();
+    fetchUsage(showingUsage);
     lastDraw = 0;
   }
 
