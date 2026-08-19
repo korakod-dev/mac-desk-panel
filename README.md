@@ -562,10 +562,15 @@ back to, rather than borrowing the screen and handing it back. Both alert
 conditions above are ignored once the readings stop — they are made of numbers
 that stopped arriving, so a full window found then is a reading from before it
 went, and leaving the clock for it would be old news presented as if it had just
-happened, at exactly the hours the clock is what the panel is for. Note which
-half of the test that is: an unattended build on a Mac with its screens off is
-running *now*, so the core columns still get raised for whoever comes back to
-find out what it did. A crossing that lands during a
+happened, at exactly the hours the clock is what the panel is for.
+
+The two part company below that. The core columns go up on the answering test
+alone, because an unattended build on a Mac with its screens off is running
+*now*, and that is worth raising for whoever comes back to find out what it did.
+The full window goes up only when somebody is actually there: it raises the very
+page the floor has just left, and it is the one condition here that stays true
+for hours — long enough to hold the panel on a bright page all evening over a
+threshold crossed while nobody was in the room. A crossing that lands during a
 banner or a manual hold waits for it, and if the Mac woke and went dark again in
 between, only where it ended up is arrived on.
 

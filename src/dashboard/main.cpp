@@ -869,12 +869,21 @@ static bool autoPickPage() {
   // would be doing it at the hours the clock is the only thing on the desk
   // still worth showing.
   //
-  // Against macAnswering() rather than the resting test, because staleness is
-  // the whole of the reason: a machine with its screens off is nobody's idea of
-  // in use, but a build running on it is running now, and the columns that show
-  // it are worth raising for whoever comes back to find out what it did.
+  // Staleness is the whole of the reason for the busy one, which is why it is
+  // against macAnswering() rather than the resting test: a machine with its
+  // screens off is nobody's idea of in use, but a build running on it is
+  // running now, and the columns that show it are worth raising for whoever
+  // comes back to find out what it did.
+  //
+  // The tight one is against the resting test instead, because what it raises
+  // is the page the panel is meant to have left. A window filling up is only
+  // news to somebody who is about to spend it, and it is the one condition here
+  // that stays true for hours — long enough to hold the panel on a bright page
+  // all evening over a threshold crossed while nobody was in the room. Awake,
+  // it still does its job: the resting page is usage anyway, and the raise is
+  // what brings you back to it from wherever you had left the panel.
   bool answering = macAnswering();
-  bool busy = answering && macBusy(), tight = answering && usageTight();
+  bool busy = answering && macBusy(), tight = awake && usageTight();
   if (!busy)  busyShown = false;
   if (!tight) tightShown = false;
 
