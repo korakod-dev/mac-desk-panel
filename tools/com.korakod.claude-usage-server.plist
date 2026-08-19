@@ -30,19 +30,23 @@
   the project's virtualenv and keeps working if .venv is rebuilt.
 
   One grant to make, once. The live reading reads the token Claude Code signed
-  in with, out of the login keychain, and the keychain asks the first time a
-  given program wants an item -- a dialog a launch agent raising it behind your
-  back is easy to miss. So answer it from a terminal first; the grant is against
-  /usr/bin/python3, which is what the agent runs too, so doing it here covers
-  the agent:
+  in with, out of the login keychain, and renews it in place when it has run
+  out -- so it reads the item and writes it back. The keychain asks the first
+  time a given program wants an item, and reading and changing it can be asked
+  about separately: two dialogs, either of which a launch agent raising it
+  behind your back is easy to miss. So answer them from a terminal first; the
+  grant is against /usr/bin/python3, which is what the agent runs too, so doing
+  it here covers the agent:
 
       /usr/bin/python3 -c 'import sys; \
           sys.path.insert(0, "/Users/korakod/Desktop/T-Display-S3/tools"); \
           import usage_server as u; print(u.live_reading(0))'
 
-  Click "Always Allow". A dict with h5/d7 in it means the whole chain works.
-  Skipping this costs nothing but the live reading: the server falls back to
-  the two caches, which is what it did before. (Where there is no keychain the
+  Click "Always Allow" to whatever it asks. A dict with h5/d7 in it means the
+  whole chain works. Skipping this costs nothing but the live reading: the
+  server falls back to the two caches, which is what it did before -- and a
+  renewal it cannot write back is refused before it spends anything, so a
+  missing grant cannot take Claude Code's own login with it. (Where there is no keychain the
   CLI keeps the token at ~/.claude/.credentials.json, which is read instead and
   needs no grant.)
 

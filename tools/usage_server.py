@@ -17,9 +17,10 @@ read_usage().
 There is a third source, and it is the only one that talks to the network:
 `GET /usage?live=1` asks the API for the figure as it stands, over the same
 endpoint Claude Code's own /usage command uses and the same credential the CLI
-signed in with. The panel asks for it only while it is actually showing the
-usage page, and every way it can fail falls back to the two files -- see "the
-live reading" for why it is here and what it costs.
+signed in with -- renewed in place, in the store the CLI keeps it in, when the
+access token has run out. The panel asks for it only while it is actually
+showing the usage page, and every way it can fail falls back to the two files --
+see "the live reading" for why it is here and what it costs.
 
     GET /usage  ->  {"h5": 55, "h5_reset": 1786210200, "h5_stale": false,
                      "d7": 51, "d7_reset": 1786237200, "d7_stale": false,
@@ -120,12 +121,26 @@ def load_token():
 # that carries the right scope is the one the CLI itself signed in with, which
 # is why /usage works there and why this reads the same store.
 #
-# That is Claude Code's own credential, not this panel's -- so it is read, never
-# written, and never refreshed here. The CLI refreshes it whenever it runs, and
-# this rides along; a token that has expired with no session since to renew it
-# is one more way the live reading is simply unavailable, which the caches
-# already answer for. On this machine it lives in the login keychain; where
-# there is no keychain the CLI keeps it in a file, and both are tried.
+# That is Claude Code's own credential, not this panel's, and the first version
+# here only read it: the CLI refreshes it whenever it runs, so this could ride
+# along. It cannot. An access token lasts hours, the refresh happens when the
+# CLI decides it needs one, and a morning that starts at the panel rather than
+# at a terminal finds the stored token expired -- the live reading then goes
+# dark and stays dark, the panel quietly serving the desktop cache's quarter of
+# an hour of lag with nothing on screen to say so. So this renews it the way the
+# CLI does, with the refresh token already in the store, and puts the result
+# back where it came from.
+#
+# Writing back is the part to be careful about, because the grant rotates: the
+# response carries a new refresh token and the old one is spent from that moment.
+# Lose it and Claude Code's own login goes with it. So the store is tested with
+# the credential unchanged *before* the exchange -- a store that will not take it
+# stops the renewal while nothing has been spent -- and what comes back is
+# written before it is used.
+#
+# On this machine the credential lives in the login keychain; where there is no
+# keychain the CLI keeps it in a file. Both are tried, in that order, for
+# reading and for writing back.
 #
 # It is a credential, so it is fenced:
 #
@@ -133,70 +148,220 @@ def load_token():
 #     Off that page the two files answer, exactly as before.
 #   * At most one call every LIVE_MIN_GAP seconds even then, and a failure
 #     stands back for LIVE_BACKOFF rather than retrying on every poll.
-#   * Every failure -- no credential, an expired token, no network, a changed
-#     endpoint -- falls back to the files. The live source can be entirely
-#     broken and the panel still reads what it read before.
+#   * A renewal happens only when the stored token is spent, never on a
+#     schedule, and at most once every REFRESH_MIN_GAP.
+#   * Every failure -- no credential, a refresh token itself expired, no
+#     network, a changed endpoint -- falls back to the files. The live source
+#     can be entirely broken and the panel still reads what it read before.
 
 USAGE_API = "https://api.anthropic.com/api/oauth/usage"
 CC_KEYCHAIN_SERVICE = "Claude Code-credentials"
 CC_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
 
+# Where the CLI renews its own token, and the client it renews as. Both read
+# out of the installed CLI rather than invented here.
+OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
+CC_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+SECURITY = "/usr/bin/security"
+
 LIVE_MIN_GAP = 25       # seconds between calls to the API
 LIVE_BACKOFF = 120      # seconds to stand back after one fails
 LIVE_TIMEOUT = 1.5      # the panel is waiting on this one; do not hold it
+REFRESH_TIMEOUT = 8     # this one the panel is allowed to miss -- see renew()
+REFRESH_MIN_GAP = 60    # seconds between renewal attempts
+EXPIRY_MARGIN = 60      # renew this long before the stored token actually ends
 TOKEN_TTL = 300         # hold a read token this long before hitting the store
 
 _live_lock = threading.Lock()
 _live = {"reading": None, "at": 0, "next_try": 0, "error": ""}
-_token = {"value": None, "read_at": 0}
+_token = {"value": None, "read_at": 0, "expires": 0, "renew": False, "spent": ""}
+_refresh = {"next_try": 0}
+
+
+def keychain_credential():
+    """What the login keychain holds, and the account it is filed under -- that
+    second half is what lets a renewal go back into the same item rather than
+    beside it as a new one."""
+    done = subprocess.run(
+        [SECURITY, "find-generic-password", "-w", "-s", CC_KEYCHAIN_SERVICE],
+        capture_output=True, text=True, timeout=30)
+    if done.returncode != 0 or not done.stdout.strip():
+        raise RuntimeError(done.stderr.strip() or "no keychain item")
+    payload = json.loads(done.stdout)
+
+    account = ""
+    meta = subprocess.run(
+        [SECURITY, "find-generic-password", "-s", CC_KEYCHAIN_SERVICE],
+        capture_output=True, text=True, timeout=30)
+    for line in meta.stdout.splitlines():
+        field, _, value = line.strip().partition("=")
+        if not field.startswith('"acct"'):
+            continue
+        # `"acct"<blob>="name"`, or a hex dump with the text alongside it when
+        # the name is not plain ASCII.
+        value = value.strip()
+        if value.startswith("0x") and '"' in value:
+            value = value.split('"', 1)[1]
+        account = value.strip().strip('"')
+        break
+    return payload, account
 
 
 def stored_credential():
-    """Claude Code's stored OAuth credential, as the CLI wrote it: the login
-    keychain on this machine, the file where there is no keychain."""
+    """Claude Code's stored OAuth credential as the CLI wrote it, with where it
+    came from so a renewal can be put back there."""
     reason = "no keychain item"
     try:
-        done = subprocess.run(
-            ["/usr/bin/security", "find-generic-password",
-             "-w", "-s", CC_KEYCHAIN_SERVICE],
-            capture_output=True, text=True, timeout=30)
-        if done.returncode == 0 and done.stdout.strip():
-            return json.loads(done.stdout)
-        reason = done.stderr.strip() or reason
-    except (OSError, ValueError) as exc:
-        reason = str(exc)
+        payload, account = keychain_credential()
+        return payload, ("keychain", account)
+    except (OSError, ValueError, RuntimeError,
+            subprocess.SubprocessError) as exc:
+        reason = str(exc) or reason
 
     try:
         with open(CC_CREDENTIALS_PATH) as f:
-            return json.load(f)
+            return json.load(f), ("file", CC_CREDENTIALS_PATH)
     except (OSError, ValueError):
         raise RuntimeError("no Claude Code credential (" + reason + ")")
 
 
-def oauth_token():
-    """The access token, held for TOKEN_TTL so a page left open does not run
-    `security` on every poll. Raises rather than send one already known to be
-    no good: a request refused still costs the round trip and the backoff."""
+def store_credential(payload, sink):
+    """Put a credential back where it was found. Raises rather than report a
+    write that did not happen: renew() leans on this both as a test before it
+    spends the refresh token and as the record of what it got back."""
+    kind, where = sink
+    blob = json.dumps(payload)
+
+    if kind == "file":
+        temp = where + ".panel-new"
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(blob)
+        os.replace(temp, where)
+        return
+
+    # -U updates the item in place, which keeps the access the CLI was granted
+    # instead of standing up a fresh item it would have to be asked about again.
+    #
+    # `security` takes the secret as an argument and offers no other way, so it
+    # is in this process's argv for as long as the call takes -- readable by
+    # anyone else logged into this machine, which on a personal Mac is nobody.
+    # Without the account this would write an item of its own beside the CLI's
+    # rather than into it, which is worse than not renewing at all.
+    if not where:
+        raise RuntimeError("keychain item has no account to write back to")
+
+    command = [SECURITY, "add-generic-password", "-U", "-a", where,
+               "-s", CC_KEYCHAIN_SERVICE, "-w", blob]
+    done = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    if done.returncode != 0:
+        raise RuntimeError("cannot store the credential: " +
+                           (done.stderr.strip() or str(done.returncode)))
+
+
+def renew(payload, oauth):
+    """Trade the stored refresh token for a fresh access token, the same grant
+    the CLI makes. Returns the updated `oauth`; raises if it cannot be had."""
     now = time.time()
-    if _token["value"] and now - _token["read_at"] < TOKEN_TTL:
+    if now < _refresh["next_try"]:
+        raise RuntimeError("renewal standing back after a failure")
+    _refresh["next_try"] = now + REFRESH_MIN_GAP
+
+    refresh_token = oauth.get("refreshToken")
+    if not refresh_token:
+        raise RuntimeError("credential carries no refresh token")
+    ends = (oauth.get("refreshTokenExpiresAt") or 0) / 1000
+    if ends and ends <= now:
+        raise RuntimeError("refresh token expired; sign in again with `claude`")
+
+    body = json.dumps({"grant_type": "refresh_token",
+                       "refresh_token": refresh_token,
+                       "client_id": CC_CLIENT_ID}).encode()
+    request = urllib.request.Request(
+        OAUTH_TOKEN_URL, data=body,
+        headers={"Content-Type": "application/json",
+                 "Accept": "application/json",
+                 "User-Agent": "t-display-s3-panel"})
+    try:
+        with urllib.request.urlopen(request, timeout=REFRESH_TIMEOUT) as response:
+            fresh = json.load(response)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read(300).decode("utf-8", "replace").replace("\n", " ")
+        raise RuntimeError(f"renewal refused, HTTP {exc.code}: {detail.strip()}")
+
+    token = fresh.get("access_token")
+    if not token:
+        raise RuntimeError("renewal carried no access token: " +
+                           ", ".join(sorted(fresh)[:8]))
+
+    oauth["accessToken"] = token
+    if fresh.get("refresh_token"):
+        oauth["refreshToken"] = fresh["refresh_token"]
+    if fresh.get("expires_in"):
+        oauth["expiresAt"] = int((now + int(fresh["expires_in"])) * 1000)
+    if fresh.get("refresh_expires_in"):
+        oauth["refreshTokenExpiresAt"] = int(
+            (now + int(fresh["refresh_expires_in"])) * 1000)
+    if fresh.get("scope"):
+        oauth["scopes"] = fresh["scope"].split()
+    return oauth
+
+
+def renewed_token(payload, oauth, sink):
+    """renew(), with the storing either side of it: the store is tested with
+    the credential unchanged first, so a store that refuses costs nothing, and
+    what comes back is written before it is handed to anybody."""
+    store_credential(payload, sink)
+    oauth = renew(payload, oauth)
+    try:
+        store_credential(payload, sink)
+    except Exception as exc:
+        # The test above passed and this did not, so something changed under us
+        # in the seconds between. The rotation has happened either way and the
+        # copy the CLI can see is the spent half of the pair; the panel can go
+        # on with what is in memory, but say plainly what it will cost.
+        print(f"renewed the token but could not store it: {exc}", flush=True)
+        print("Claude Code's stored credential is now the spent one -- run "
+              "`claude` and sign in again if it stops working", flush=True)
+    return oauth
+
+
+def oauth_token():
+    """The access token, renewed when the stored one is spent, and held for
+    TOKEN_TTL so a page left open does not run `security` on every poll."""
+    now = time.time()
+    if (_token["value"] and not _token["renew"]
+            and now - _token["read_at"] < TOKEN_TTL
+            and now < _token["expires"] - EXPIRY_MARGIN):
         return _token["value"]
 
-    stored = stored_credential()
-    oauth = stored.get("claudeAiOauth") or stored
-    token = oauth.get("accessToken")
-    if not token:
-        raise RuntimeError("credential carries no access token")
+    payload, sink = stored_credential()
+    oauth = payload.get("claudeAiOauth") or payload
+
+    expires = (oauth.get("expiresAt") or 0) / 1000
+    spent = bool(expires) and expires - EXPIRY_MARGIN <= now
+    # A 401 against a token the store called good asks for a renewal too -- but
+    # not if the store has moved on since, which means the CLI renewed it under
+    # us and the answer is already sitting there.
+    if _token["renew"] and oauth.get("accessToken") == _token["spent"]:
+        spent = True
+
+    if spent:
+        oauth = renewed_token(payload, oauth, sink)
+        expires = (oauth.get("expiresAt") or 0) / 1000
+        print("renewed Claude Code's access token", flush=True)
 
     scopes = oauth.get("scopes") or []
     if scopes and "user:profile" not in scopes:
         raise RuntimeError("token is scoped " + ",".join(scopes) +
                            " -- this endpoint wants user:profile")
 
-    expires = oauth.get("expiresAt") or 0
-    if expires and expires / 1000 <= now:
-        raise RuntimeError("token expired; run a Claude Code session to renew")
+    token = oauth.get("accessToken")
+    if not token:
+        raise RuntimeError("credential carries no access token")
 
-    _token["value"], _token["read_at"] = token, now
+    _token.update(value=token, read_at=now, renew=False, spent="",
+                  expires=expires or now + TOKEN_TTL)
     return token
 
 
@@ -263,6 +428,11 @@ def fetch_live():
         # 404 means the endpoint moved, and they look the same from a status
         # code alone.
         detail = exc.read(200).decode("utf-8", "replace").replace("\n", " ")
+        if exc.code == 401:
+            # The store called this token good and the API disagrees -- revoked,
+            # or a clock that is not where the store thinks it is. Renew before
+            # asking again rather than spending the backoff on the same token.
+            _token["renew"], _token["spent"] = True, _token["value"]
         raise RuntimeError(f"HTTP {exc.code}: {detail.strip()}")
 
     h5, h5_reset, d7, d7_reset = windows(data)
@@ -425,7 +595,8 @@ def main():
 
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"serving {CACHE} on http://0.0.0.0:{port}/usage", flush=True)
-    print(f"?live=1 asks the API directly, at most every {LIVE_MIN_GAP}s",
+    print(f"?live=1 asks the API directly, at most every {LIVE_MIN_GAP}s, "
+          f"renewing {CC_KEYCHAIN_SERVICE} when its token has run out",
           flush=True)
     try:
         server.serve_forever()

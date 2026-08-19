@@ -249,10 +249,27 @@ the one token on the machine that works is the CLI's own — which is why `/usag
 works there. On macOS it is in the login keychain as **Claude Code-credentials**,
 and reading it needs the keychain's permission the first time (the plist beside
 the server says how to answer that once). Where there is no keychain the CLI
-keeps it at `~/.claude/.credentials.json`, read instead. The server never writes
-or refreshes it — the CLI does that whenever it runs, and this reads whatever is
-current; an access token expired with no session since to renew it is just one
-more way the live reading is off.
+keeps it at `~/.claude/.credentials.json`, read instead.
+
+The first version here only read that credential, on the reasoning that the CLI
+refreshes it whenever it runs and this could ride along. It cannot: an access
+token lasts hours, the CLI refreshes when the CLI decides it needs to, and a
+morning that starts at the panel rather than at a terminal finds the stored
+token expired. The live reading then goes dark and stays dark, and the panel
+serves the desktop cache's quarter of an hour of lag without saying so. So the
+server renews it the way the CLI does — the `refresh_token` grant against
+`platform.claude.com/v1/oauth/token`, as the same client — and puts the result
+back in the same keychain item under the same account.
+
+Writing back is the part to be careful about, because the grant rotates: the
+response carries a new refresh token and the old one is spent from that moment,
+so dropping it takes Claude Code's own login with it. Two things guard that.
+The store is tested first, with the credential unchanged — if the keychain will
+not take it, the renewal stops while nothing has been spent, which is also what
+makes a missing keychain grant harmless. And what comes back is written before
+it is used, so the copy on disk is never the older half of the pair. A renewal
+is attempted only when the stored token is spent, never on a schedule, and at
+most once a minute.
 
 The request carries `anthropic-beta: oauth-2025-04-20`, the header that has the
 API read a Bearer as an OAuth token rather than an API key — a documented flag,
@@ -277,8 +294,8 @@ It is a credential, so it is fenced:
   is decided from that reading.
 - **At most one call every 25 seconds**, and one that fails stands back for two
   minutes rather than retrying on every poll.
-- **Every failure falls back to the files.** No credential, an expired token,
-  no network, a changed endpoint: the panel shows what it showed before,
+- **Every failure falls back to the files.** No credential, a refresh token
+  itself expired, no network, a changed endpoint: the panel shows what it did,
   seventeen minutes old and saying so. The live path can be entirely broken
   without the page being.
 
