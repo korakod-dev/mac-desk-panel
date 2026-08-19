@@ -425,6 +425,7 @@ struct MacStats {
   int      diskFree = -1;      // GB — off the page since the merge, still logged
   int      diskUsed = -1;      // percent
   String   display;            // "external" / "builtin" / "asleep" / "none"
+  int      idle     = -1;      // seconds since anyone last touched the Mac
   uint32_t up       = 0;       // seconds since the Mac booted
   int      age      = -1;      // snapshot age in seconds, as reported at `fetched`
   uint32_t fetched  = 0;
@@ -492,10 +493,43 @@ static bool macScreensOn() {
 // screen going dark is the whole of what they saw. The reading costs nothing:
 // mac_stats_server takes it on its fast pass from the framework that owns it.
 //
+// What that reading still could not see is the screens coming on *without* a
+// person. This Mac wakes itself out of deep sleep for a notification, lights
+// the screens for anything from one second to half a minute, and goes back to
+// sleep — seven of the twenty full wakes in the week this was written, three of
+// them in one day, against six the machine was woken for on purpose. Every one
+// of those was the panel jumping off the clock onto the usage page at
+// three-quarter brightness, on a desk nobody was sitting at, for as long as the
+// wake lasted plus the thirty seconds it takes the reading to go stale. It is
+// the same complaint the screen reading was added to answer, arriving through
+// the other door.
+//
+// So the question is put to the one thing a wake for a notification cannot
+// fake: whether anybody has touched the machine. mac_stats_server turns the HID
+// clock into wall-clock seconds since the last keyboard or mouse event — see
+// idle() there for why that is more than reporting the counter — and screens
+// that have been on that long with nothing touched are on for a reason that is
+// not a person.
+//
+// Ten minutes because that is this Mac's own display-sleep timeout: within it,
+// the screens being on is the machine agreeing that somebody is here. Past it
+// they are on for something else — a wake nobody asked for, or a video holding
+// the display awake, and a film is not work the usage page has anything to say
+// about. Either way the panel rests on the clock, and the first touch of the
+// mouse brings it back inside a poll.
+static const int MAC_IDLE_S = 600;
+
+// An unknown idle reading is read as tended, on the same principle as an
+// unknown screen above: an older server, or one whose framework would not load,
+// should leave the panel behaving as it did before this field existed.
+static bool macTended() { return mac.idle < 0 || mac.idle <= MAC_IDLE_S; }
+
 // Two things read this — the resting page and the backlight — and they must not
 // disagree about the same machine, which is why it is one function rather than
 // the same test written twice.
-static bool macAwake() { return macAnswering() && macScreensOn(); }
+static bool macAwake() {
+  return macAnswering() && macScreensOn() && macTended();
+}
 
 static bool fetchMac() {
   if (!net::online()) {
@@ -525,6 +559,7 @@ static bool fetchMac() {
   mac.diskFree = doc["disk_free_gb"] | -1;
   mac.diskUsed = doc["disk_used"]    | -1;
   mac.display  = doc["display"]      | "";
+  mac.idle     = doc["idle"]         | -1;
   mac.up       = doc["uptime_s"]     | 0;
   mac.age      = doc["age"]          | -1;
 
@@ -533,9 +568,10 @@ static bool fetchMac() {
   mac.valid   = mac.batPct >= 0 || mac.load1 >= 0 || mac.memUsed >= 0;
   mac.fetched = millis();
   mac.error   = mac.valid ? "" : "no reading";
-  Serial.printf("[mac] bat=%d%% %s load=%.2f mem=%d%% disk=%dGB display=%s\n",
-                mac.batPct, mac.batState.c_str(), mac.load1, mac.memUsed,
-                mac.diskFree, mac.display.c_str());
+  Serial.printf(
+      "[mac] bat=%d%% %s load=%.2f mem=%d%% disk=%dGB display=%s idle=%ds\n",
+      mac.batPct, mac.batState.c_str(), mac.load1, mac.memUsed, mac.diskFree,
+      mac.display.c_str(), mac.idle);
   return mac.valid;
 }
 
@@ -855,9 +891,10 @@ static bool autoPickPage() {
     autoReturn = -1;
     page = restPage(awake);
     Serial.printf("[auto] resting on page %u, mac %s\n", page,
-                  awake            ? "awake"
-                  : macAnswering() ? "dark"
-                                   : "asleep");
+                  awake              ? "awake"
+                  : !macAnswering()  ? "asleep"
+                  : macScreensOn()   ? "untended"
+                                     : "dark");
   } else if (tight && !tightShown) {
     // Usage wins the tie: a full window stops the work, a busy machine only
     // slows it down.

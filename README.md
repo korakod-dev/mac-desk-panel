@@ -147,7 +147,7 @@ each script and carry their own install instructions in a comment at the top.
 | `tools/usb_net_bridge.py` | 8788 | Answers the panel's requests over the cable. Needs pyserial; **replaces** `pio device monitor`, since it holds the port. |
 | `tools/usage_server.py` | 8787 | Serves the 5h/7d limits, out of two local files — and out of the API itself while the panel is showing that page. Stdlib only. |
 | `tools/desktop_usage_probe.py` | — | Not a server: every 60s, mirrors the Claude desktop app's own usage reading into a second cache, so `usage_server.py` has something to fall back on once a CLI session ends. Stdlib only. |
-| `tools/mac_stats_server.py` | 8789 | Serves battery, load, memory, disk, which screen is being driven, per-core CPU, and the notification mailbox. Stdlib only. |
+| `tools/mac_stats_server.py` | 8789 | Serves battery, load, memory, disk, which screen is being driven, how long since anyone touched the machine, per-core CPU, and the notification mailbox. Stdlib only. |
 
 The two servers run on the **system** python on purpose — stdlib only, so they
 keep working when the project venv is rebuilt or deleted. Same for the probe,
@@ -437,7 +437,7 @@ of it — as a PNG:
 
 It captures from wherever the panel is rather than from the first page, so which
 page lands in `shot0.png` is whichever one it was resting on — the usage page
-while somebody is at the Mac, the flip clock once its screens go dark.
+while somebody is at the Mac, the flip clock once nobody is.
 
 | | |
 |---|---|
@@ -514,17 +514,48 @@ just come on means somebody sat down, and what is left of the 5h window is the
 first thing that changes what they do next. So the wake is the panel's cue to
 have the usage figures already up, before anyone asks for them.
 
-"Nobody is at it" is two conditions, and it takes only one: the readings stopped
-arriving, **or** they are still arriving and every screen over there is off. The
-second half is the one that earns its keep on this desk. The screens idle out
-after ten minutes, but a couple of the apps that live on this Mac hold sleep
-assertions, so the machine itself answers all night — and on the answering test
-alone the panel sat on the Claude usage page at three-quarter brightness in a
-dark room, saying somebody was working. Even a Mac that really is asleep
-dark-wakes for maintenance every fifteen minutes with Power Nap on, and each of
-those was another minute and a half of the same. The screen going dark is also
-the whole of what a person sees when they say the Mac went to sleep, so it is
-the honest thing to follow.
+"Nobody is at it" is three conditions, and it takes only one: the readings
+stopped arriving, **or** they are still arriving and every screen over there is
+off, **or** the screens are on and nothing over there has been touched in ten
+minutes.
+
+The second earns its keep at night. The screens idle out after ten minutes, but
+a couple of the apps that live on this Mac hold sleep assertions, so the machine
+itself answers all night — and on the answering test alone the panel sat on the
+Claude usage page at three-quarter brightness in a dark room, saying somebody
+was working. Even a Mac that really is asleep dark-wakes for maintenance every
+fifteen minutes with Power Nap on, and each of those was another minute and a
+half of the same. The screen going dark is also the whole of what a person sees
+when they say the Mac went to sleep, so it is the honest thing to follow.
+
+The third earns its keep during the day, and it exists because the second is not
+the whole of the question. This Mac wakes itself out of deep sleep for a
+notification, lights the screens for anything between a second and half a minute
+with nobody in the room, and goes back to sleep: seven of the twenty full wakes
+in the week this was written, three of them in one afternoon, against six the
+machine was woken for on purpose. Every one of those was the panel jumping off
+the clock onto the usage page at three-quarter brightness, on a desk nobody was
+sitting at, for as long as the wake lasted plus the thirty seconds it takes the
+reading to go stale — the same complaint the screen reading was added to answer,
+arriving through the other door. The screens coming on says the machine woke.
+Only a keyboard or a mouse says a person did.
+
+So the question is put to the HID clock, which is the one thing a wake for a
+notification cannot fake. `mac_stats_server.py` reports wall-clock seconds since
+the last keyboard or mouse event rather than the counter itself, because that
+counter freezes while the machine sleeps: it says "fifty-five seconds" on the
+way out of a fifteen-minute nap, which is exactly the answer that would make the
+wake look like somebody sitting down. What survives the freeze is the moment of
+the last event, so that is what it keeps, and it moves it only when the counter
+runs backwards — which nothing but a real event does.
+
+Ten minutes because that is this Mac's own display-sleep timeout: inside it, the
+screens being on is the machine agreeing that somebody is here, so in ordinary
+use the two fire together and the reading changes nothing. Past it the screens
+are on for something else — a wake nobody asked for, or a film holding the
+display awake, and a film is not work the usage page has anything to say about.
+Either way the panel rests on the clock, and the first touch of the mouse brings
+it back inside a poll.
 
 That is a floor, not an interruption: the crossing moves where automatic falls
 back to, rather than borrowing the screen and handing it back. Both alert
@@ -534,9 +565,9 @@ went, and leaving the clock for it would be old news presented as if it had just
 happened, at exactly the hours the clock is what the panel is for. Note which
 half of the test that is: an unattended build on a Mac with its screens off is
 running *now*, so the core columns still get raised for whoever comes back to
-find out what it did. A crossing that lands during a banner or a manual hold
-waits for it, and if the Mac woke and went dark again in between, only where it
-ended up is arrived on.
+find out what it did. A crossing that lands during a
+banner or a manual hold waits for it, and if the Mac woke and went dark again in
+between, only where it ended up is arrived on.
 
 A banner that times out unanswered arrives at that same resting page, and for
 the same reason the floor exists at all: whatever page it was covering was

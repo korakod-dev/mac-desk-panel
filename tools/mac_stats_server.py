@@ -7,7 +7,7 @@ bridge when one is running, over the LAN otherwise:
     GET /mac  ->  {"bat_pct": 65, "bat_state": "discharging", "bat_mins": 481,
                    "load1": 2.85, "ncpu": 11, "mem_used": 30,
                    "disk_free_gb": 179, "disk_used": 60, "display": "external",
-                   "uptime_s": 219043, "age": 2, "now": 1786243278}
+                   "idle": 34, "uptime_s": 219043, "age": 2, "now": 1786243278}
 
     GET /cpu  ->  {"cores": [12, 3, 45, ...], "avg": 27,
                    "ecores": 6, "pcores": 5, "age": 0}
@@ -304,6 +304,135 @@ def display():
         return {"display": ""}
 
 
+# IOKit and CoreFoundation, for idle(). Loaded the same way and for the same
+# reason as CoreGraphics above: the answer belongs to a framework, and the
+# `ioreg -c IOHIDSystem` that also prints it costs 16 ms of a pass that is
+# otherwise under 30.
+_iokit = None
+_cf = None
+_hid_warned = False
+
+kCFStringEncodingUTF8 = 0x08000100
+kCFNumberSInt64Type = 4
+
+
+def _hid_frameworks():
+    global _iokit, _cf
+    if _iokit is None:
+        _iokit = ctypes.CDLL("/System/Library/Frameworks/IOKit.framework/IOKit")
+        _cf = ctypes.CDLL(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        # Every one of these returns or takes a pointer, and ctypes assumes a
+        # C int for anything it is not told about — which on this machine
+        # truncates an address to its bottom 32 bits and hands back a pointer
+        # into nothing.
+        _iokit.IOServiceMatching.restype = ctypes.c_void_p
+        _iokit.IOServiceMatching.argtypes = [ctypes.c_char_p]
+        _iokit.IOServiceGetMatchingService.restype = ctypes.c_uint32
+        _iokit.IOServiceGetMatchingService.argtypes = [ctypes.c_uint32,
+                                                      ctypes.c_void_p]
+        _iokit.IORegistryEntryCreateCFProperty.restype = ctypes.c_void_p
+        _iokit.IORegistryEntryCreateCFProperty.argtypes = [
+            ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32]
+        _iokit.IOObjectRelease.argtypes = [ctypes.c_uint32]
+        _cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+        _cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p,
+                                                  ctypes.c_char_p,
+                                                  ctypes.c_uint32]
+        _cf.CFNumberGetValue.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                         ctypes.c_void_p]
+        _cf.CFRelease.argtypes = [ctypes.c_void_p]
+    return _iokit, _cf
+
+
+def _hid_idle():
+    """Seconds since the last keyboard, mouse or trackpad event, or None.
+
+    IOHIDSystem keeps this as nanoseconds in the IO registry, and it is the
+    only reading here that a Bluetooth mouse updates as reliably as the built-in
+    keyboard — measured against the tickle powerd logs, which agree with it.
+
+    What it counts is time the machine spent *awake*. The clock behind it stops
+    when the machine sleeps and picks up where it left off on the way out, so a
+    Mac that slept for a quarter of an hour comes back still saying "a minute".
+    idle() below is what turns that into wall-clock time.
+    """
+    try:
+        iokit, cf = _hid_frameworks()
+        service = iokit.IOServiceGetMatchingService(
+            0, iokit.IOServiceMatching(b"IOHIDSystem"))
+        if not service:
+            return None
+        key = cf.CFStringCreateWithCString(None, b"HIDIdleTime",
+                                           kCFStringEncodingUTF8)
+        value = iokit.IORegistryEntryCreateCFProperty(service, key, None, 0)
+        ns = ctypes.c_uint64()
+        got = value and cf.CFNumberGetValue(ctypes.c_void_p(value),
+                                            kCFNumberSInt64Type,
+                                            ctypes.byref(ns))
+        # Both belong to this process the moment they are created, the same way
+        # the CPU tick array does — see sample_cpu() on what skipping that costs
+        # over a day of five-second passes.
+        if value:
+            cf.CFRelease(ctypes.c_void_p(value))
+        cf.CFRelease(ctypes.c_void_p(key))
+        iokit.IOObjectRelease(service)
+        return ns.value / 1e9 if got else None
+    except (OSError, AttributeError) as exc:
+        global _hid_warned
+        if not _hid_warned:
+            _hid_warned = True
+            print(f"idle reading unavailable: {exc}", flush=True)
+        return None
+
+
+# A pass is due every STATS_FAST seconds, so a longer gap than this between two
+# of them means the machine was not running in between — it slept, and the HID
+# clock slept with it.
+IDLE_STALL = 30.0
+
+_idle = {"seen": None, "at": 0.0, "pass": 0.0}
+
+
+def idle():
+    """Wall-clock seconds since a person last touched this Mac, or -1.
+
+    The panel asks this alongside `display` because the screens being on is not
+    the same question as anyone being here, and this Mac answers the two
+    differently several times a day: a notification wakes it out of deep sleep,
+    the screens come on for twenty seconds with nobody in the room, and it goes
+    back to sleep. Seven of the twenty full wakes in the week this was written
+    were that, against six the user asked for.
+
+    Built by watching _hid_idle() rather than reporting it, because that counter
+    freezes while the machine sleeps: it says "fifty-five seconds" on the way
+    out of a fifteen-minute nap, which is exactly the answer that would make a
+    notification wake look like somebody sitting down. What survives the freeze
+    is the *moment* of the last event, so that is what is kept — and only moved
+    when the counter goes backwards, which nothing but a real event does.
+
+    A pass that follows a stall infers nothing: the counter resumed where it
+    left off, so it looks like it went backwards by however long the pass was
+    late, and there is no event behind that.
+    """
+    now = time.time()
+    hid = _hid_idle()
+    if hid is None:
+        return {"idle": -1}
+
+    late = now - _idle["pass"] > IDLE_STALL
+    _idle["pass"] = now
+    if _idle["seen"] is None:
+        # Nothing to compare against yet. Taken at face value, which is right
+        # unless the machine has slept since that event, and self-corrects at
+        # the next one.
+        _idle["at"] = now - hid
+    elif not late and hid < _idle["seen"]:
+        _idle["at"] = now - hid
+    _idle["seen"] = hid
+    return {"idle": round(now - _idle["at"])}
+
+
 def uptime():
     """Seconds since boot, derived from the kernel's boot timestamp."""
     out = run("sysctl", "-n", "kern.boottime")
@@ -534,12 +663,12 @@ def parse_body(body, ctype):
 # because it is the one reading here that costs no process spawn — the whole
 # argument for the two-speed split does not apply to it. Five seconds is then
 # just the slowest it can be behind a lid closing.
-FAST_READINGS = (cpu, memory, display)
+FAST_READINGS = (cpu, memory, display, idle)
 SLOW_READINGS = (battery, disk, uptime)
 
 UNKNOWN = {"bat_pct": -1, "bat_state": "", "bat_mins": -1, "load1": -1,
            "ncpu": -1, "mem_used": -1, "disk_free_gb": -1, "disk_used": -1,
-           "uptime_s": -1, "display": ""}
+           "uptime_s": -1, "display": "", "idle": -1}
 
 _stats = {"data": None, "at": 0.0}
 
