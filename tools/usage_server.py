@@ -11,8 +11,8 @@ which means it goes stale the moment the terminal closes, even while the
 Claude desktop app keeps reporting the same account's usage on its own.
 desktop_usage_probe.py mirrors that into a second cache, same four-field
 shape but with the resets always 0 (the desktop app's history never carries
-one). Whichever of the two caches was written more recently wins; see
-read_usage().
+one). Whichever source was read most recently wins -- the two caches and the
+live reading below are weighed the same way; see read_usage().
 
 There is a third source, and it is the only one that talks to the network:
 `GET /usage?live=1` asks the API for the figure as it stands, over the same
@@ -147,12 +147,14 @@ def load_token():
 #   * The panel asks for it only while the usage page is the page on screen.
 #     Off that page the two files answer, exactly as before.
 #   * At most one call every LIVE_MIN_GAP seconds even then, and a failure
-#     stands back for LIVE_BACKOFF rather than retrying on every poll.
+#     stands back for LIVE_BACKOFF rather than retrying on every poll --
+#     LIVE_LIMITED when the failure was the API refusing the cadence itself.
 #   * A renewal happens only when the stored token is spent, never on a
 #     schedule, and at most once every REFRESH_MIN_GAP.
 #   * Every failure -- no credential, a refresh token itself expired, no
-#     network, a changed endpoint -- falls back to the files. The live source
-#     can be entirely broken and the panel still reads what it read before.
+#     network, a changed endpoint -- falls back to the last live reading and
+#     the files, whichever of them is freshest. The live source can be entirely
+#     broken and the panel still reads what it read before.
 
 USAGE_API = "https://api.anthropic.com/api/oauth/usage"
 CC_KEYCHAIN_SERVICE = "Claude Code-credentials"
@@ -166,6 +168,7 @@ SECURITY = "/usr/bin/security"
 
 LIVE_MIN_GAP = 25       # seconds between calls to the API
 LIVE_BACKOFF = 120      # seconds to stand back after one fails
+LIVE_LIMITED = 300      # ...and after one the API refused for being too often
 LIVE_TIMEOUT = 1.5      # the panel is waiting on this one; do not hold it
 REFRESH_TIMEOUT = 8     # this one the panel is allowed to miss -- see renew()
 REFRESH_MIN_GAP = 60    # seconds between renewal attempts
@@ -443,31 +446,57 @@ def fetch_live():
             "d7": d7, "d7_reset": d7_reset, "age": 0}
 
 
-def live_reading(now):
-    """The reading from the API in the shape parse_cache() returns, or None if
-    it cannot be had. Never raises: the caller has two files to fall back on,
-    and a panel showing the older number beats a panel showing an error."""
+def live_reading(now, ask):
+    """The API's reading in the shape parse_cache() returns, aged like any
+    other source, or None if the API has never answered. Never raises: the
+    caller has two files as well, and a panel showing an older number beats a
+    panel showing an error.
+
+    `ask` is the panel saying the usage page is the one on screen. It gates the
+    call to the API -- not the use of what that call last returned. Those are
+    two different questions, and answering both with the one flag is what put a
+    figure on the panel that walked backwards: a reading the API had given
+    thirty seconds ago was thrown away the moment it could not be refreshed,
+    and the desktop cache took the screen with its quarter of an hour of lag on
+    it. 34% then 29% then 34%, on a window that only ever climbs.
+
+    So what is held is always offered, carrying the seconds actually elapsed on
+    it, and read_usage() weighs it against the files exactly as it weighs them
+    against each other -- by which is freshest. A cache written since wins on
+    its own, and no reading has to be discarded for another to be preferred.
+    """
     with _live_lock:
-        if _live["reading"] is not None and now - _live["at"] < LIVE_MIN_GAP:
-            return dict(_live["reading"], age=now - _live["at"])
+        held = (dict(_live["reading"], age=now - _live["at"])
+                if _live["reading"] is not None else None)
+        if not ask:
+            return held
+        if held is not None and held["age"] < LIVE_MIN_GAP:
+            return held
         if now < _live["next_try"]:
-            return None
+            return held
 
         try:
             reading = fetch_live()
         except Exception as exc:
-            _live["next_try"] = now + LIVE_BACKOFF
+            # A rate limit is the API saying this cadence is too high, which is
+            # a thing a timeout or a dropped connection does not say. Standing
+            # back from it for the same two minutes walks straight back into
+            # the same refusal, so it is given longer.
+            limited = str(exc).startswith("HTTP 429")
+            _live["next_try"] = now + (LIVE_LIMITED if limited else LIVE_BACKOFF)
             # The held token is not ours to hand back, but a dead one should
             # not sit in the cache for the whole TTL either -- the CLI may
-            # renew it in the store before then.
-            _token["value"] = None
+            # renew it in the store before then. A refusal for asking too often
+            # says nothing about the token, so that one keeps it.
+            if not limited:
+                _token["value"] = None
             # Only when it changes: this is asked for every 30s while the page
             # is up, and one broken token would otherwise fill the log.
             if str(exc) != _live["error"]:
                 _live["error"] = str(exc)
-                print(f"live reading unavailable, using the caches: {exc}",
-                      flush=True)
-            return None
+                print(f"live reading unavailable, holding the last one: "
+                      f"{exc}", flush=True)
+            return held
 
         if _live["error"]:
             print("live reading working again", flush=True)
@@ -511,20 +540,23 @@ def read_usage(live=False):
 
     primary = parse_cache(CACHE, now)
     desktop = parse_cache(DESKTOP_CACHE, now)
-    fresh = live_reading(now) if live else None
+    fresh = live_reading(now, live)
 
     chosen, other = primary, desktop
     if desktop is not None and (primary is None or desktop["age"] < primary["age"]):
         chosen, other = desktop, primary
-    # Ties go to the live reading: seconds old at the worst, and the only
-    # source that states both reset times itself.
+    # Ties go to the live reading: it is the only source that states both
+    # reset times itself.
     if fresh is not None and (chosen is None or fresh["age"] <= chosen["age"]):
         chosen, other = fresh, chosen
     if chosen is None:
         return out
 
     out["age"] = chosen["age"]
-    out["live"] = chosen is fresh
+    # The panel's "live" badge stands in place of the age, so it may only go on
+    # a number the host has just been told. A held reading is still the API's,
+    # but it is minutes old and reports those minutes like anything else here.
+    out["live"] = chosen is fresh and chosen["age"] < LIVE_MIN_GAP
 
     for key in ("h5", "d7"):
         pct, reset = chosen[key], chosen[key + "_reset"]
