@@ -2,8 +2,9 @@
 
 A LilyGO T-Display-S3 on a desk, showing the handful of things worth a glance
 while you work: the time and the weather, how much of the Claude Code usage
-window is left, what the Mac beside it is doing, and a banner the Mac can raise
-when something actually needs you.
+window is left, what the Mac beside it is doing, a pomodoro timer that is the
+panel's own rather than another window on the machine you are concentrating on,
+and a banner the Mac can raise when something actually needs you.
 
 It runs off the USB-C cable with no WiFi at all — the host does the fetching on
 the panel's behalf over the same serial link that carries the console. WiFi is
@@ -13,12 +14,15 @@ there as a fallback, not a requirement.
 |---|---|
 | ![the flip clock](docs/pages/1-flip.png) | ![Claude Code usage](docs/pages/2-usage.png) |
 | **flip** — a split-flap clock, and how warm it is | **usage** — the 5h and 7d windows, and when they roll |
-| ![Mac vitals and cores](docs/pages/3-mac.png) | ![the panel's own vitals](docs/pages/4-vitals.png) |
-| **mac** — charge, screen, memory, disk, a column per core | **vitals** — not a page: hold `IO14` for the panel's own |
+| ![Mac vitals and cores](docs/pages/3-mac.png) | ![the pomodoro timer](docs/pages/5-pomo.png) |
+| **mac** — charge, screen, memory, disk, a column per core | **pomo** — 25 on, 5 off, and how far into the set you are |
+| ![the panel's own vitals](docs/pages/4-vitals.png) | |
+| **vitals** — not a page: hold `IO14` for the panel's own | |
 
 `IO14` moves to the next page, and held, brings up the panel's own vitals over
 whatever is showing. `BOOT` refreshes the page in front of you, and held, dims
-or brightens the panel.
+or brightens the panel — except on **pomo**, where there is nothing to fetch
+and both halves of the button belong to the timer.
 
 There was a second clock page — **now**, carrying the time again in a 64px
 face with the full date, the conditions and the place beside it. The argument
@@ -27,8 +31,7 @@ screens go dark, and a page that has to be legible from the doorway at a
 quarter brightness cannot also be the one holding a line of forecast in 16px
 type. That argument was for the *reading*; it was never one for the *page*.
 Half the cycle opened on the same clock, which is what you actually see
-pressing `IO14`. So it is gone, and the cycle is three. What that page alone
-carried went with it: the seconds, the spelled-out date, the conditions text
+pressing `IO14`. So it is gone, and what that page alone carried went with it: the seconds, the spelled-out date, the conditions text
 and the place name. The status bar still dates the panel, abbreviated, and the
 temperature with feels-like is still under the flip clock — nothing that
 answers a first question was on that page by itself.
@@ -361,6 +364,61 @@ are kept here:
 
 Copy them to `~/.claude/` and point `settings.json` at them.
 
+## The pomodoro page
+
+The only page here holding a state of its own. Every other one is a window onto
+a machine somewhere — the sky, the Mac, the API's idea of how much of the week
+is left — and this one is a thing the panel knows and nothing else does.
+
+It is on the panel rather than in a window on the Mac for the reason the clock
+is: a timer on the machine you are working on gets covered up by the work, and
+one that raises a notification there is one more thing interrupting the screen
+you are trying to concentrate on. Beside the keyboard it is read the way a wall
+clock is, by looking at it, and when it does want you it has a backlight to
+flash and a screen nothing else is using.
+
+Twenty-five minutes of work, five off, a quarter of an hour after the fourth.
+Constants rather than settings — there is no keyboard on this board to change
+them with, and a length you can talk yourself into extending is not a timer.
+
+| | |
+|---|---|
+| `BOOT` | start, pause, resume |
+| hold `BOOT` | reset the phase — or skip it, if nobody has started it yet |
+
+Two actions on one hold, told apart by what the timer is already doing, and the
+hint bar names the one it is about to do so the pair is read off the screen
+rather than remembered. A phase with time spent on it goes back to full; one
+nobody has touched is skipped instead, which is how the break you do not want,
+or the block you already did away from the desk, gets out of the way. Both are
+behind the hold because both throw something away. `P` on the console is the
+press, for a host that wants to drive it.
+
+**A rest starts itself and a block of work does not.** That is the one asymmetry
+here and the useful one: five minutes that begin when you notice the banner are
+not five minutes off, so the break goes on the clock the moment the work ends —
+while work that begins because a timer said so is work begun while you are still
+in the kitchen, so the next block waits for a finger.
+
+The end of a phase raises the same banner the Mac's notifications use, flashing
+the backlight, coloured for the phase that is *starting* rather than by severity
+— which is the whole reason the timer belongs on a panel with a backlight rather
+than in a window. Teal means get up, magenta means sit down, and both read
+before the words do.
+
+The page itself is two cards and they answer two questions. The top one is the
+phase and what is left of it, in the 64px face nothing had had a use for since
+the plain clock page was merged away; the bottom one is the set, four cells
+filling as the afternoon goes, which is the thing a pomodoro timer knows and a
+clock does not. Their hues are deliberately different: the top card runs magenta
+to teal to violet as the phase turns over, and the set stays blue underneath it,
+because a set does not change colour halfway through.
+
+The countdown is white while it runs, dim before it has been started, and blinks
+between the two while it is paused — a stopped countdown otherwise looks exactly
+like one nobody has started. The last minute goes warm, which is the severity
+ramp doing its usual job on the same page as the other one.
+
 ## Notifications
 
 `mac_stats_server.py` holds one message. Anything on the machine can post one
@@ -371,7 +429,11 @@ until a button acknowledges it:
 curl -sf -X POST localhost:8789/notify -d 'msg=build failed' -d kind=warn -d ttl=30
 ```
 
-`kind` is `info`, `warn` or `alert` and picks the colour. `ttl` is seconds, `0`
+`kind` is `info`, `warn` or `alert` and picks the colour. The panel raises two
+of its own over the same mechanism, which is why a fourth kind exists that the
+host cannot post: a restart nobody asked for, and the end of a pomodoro phase —
+that one carrying its own hue, because what is worth knowing before the words
+are read is which phase is starting and not how much it matters. `ttl` is seconds, `0`
 meaning until dismissed — the default for `alert`, which is the difference
 between an alert and a note. Nothing waits forever even so: a banner with no
 `ttl` of its own is taken down after ten minutes, and one that runs out
@@ -432,7 +494,7 @@ The firmware takes single-byte commands on the console, and
 of it — as a PNG:
 
 ```bash
-.venv/bin/python tools/grab_screen.py shot 3      # capture all three pages
+.venv/bin/python tools/grab_screen.py shot 4      # capture all four pages
 ```
 
 It captures from wherever the panel is rather than from the first page, so which
@@ -445,9 +507,10 @@ while somebody is at the Mac, the flip clock once nobody is.
 | `S` | dump the framebuffer as raw RGB565 |
 | `A` | toggle automatic page selection |
 | `V` | toggle the vitals overlay |
+| `P` | start or pause the pomodoro timer |
 
-`V` exists because the overlay's own way in is a finger on a button, which is no
-use to a host trying to photograph it.
+`V` and `P` exist because their own way in is a finger on a button, which is no
+use to a host trying to photograph an overlay or a timer mid-count.
 
 While the bridge is running it owns the serial port, so `grab_screen.py` talks
 to the bridge's passthrough socket instead. Uploads pause the bridge
@@ -501,7 +564,7 @@ machine's load passes three quarters of its core count, and to the usage page
 when a window goes over 85%. Any button
 hands control back for two minutes; `A` turns it off entirely. The lit dot in
 the status bar says which mode it is in — cyan for automatic, warm while you
-have it, white when automatic is off. The three dots are otherwise the three
+have it, white when automatic is off. The four dots are otherwise the four
 pages in their own colours, so hue says which dot is which page, brightness says
 which one you are on, and the colour of the one you are on says who is choosing
 it.
@@ -563,6 +626,16 @@ conditions above are ignored once the readings stop — they are made of numbers
 that stopped arriving, so a full window found then is a reading from before it
 went, and leaving the clock for it would be old news presented as if it had just
 happened, at exactly the hours the clock is what the panel is for.
+
+A running pomodoro outranks both, and is the only page here chosen by something
+the panel was *told* rather than something it observed: somebody pressed a
+button to start it, which is a stronger statement about what is worth showing
+than any reading off the Mac, and the minutes left are what they pressed it to
+be able to see. It gives the page back when the clock stops, or ten minutes
+after a phase left waiting to be started gives up waiting. The same fact lifts
+the brightness — a machine can be woken by a notification, while a pomodoro only
+starts because a finger started it, so it is the better evidence of the two that
+somebody is here.
 
 The two part company below that. The core columns go up on the answering test
 alone, because an unattended build on a Mac with its screens off is running
