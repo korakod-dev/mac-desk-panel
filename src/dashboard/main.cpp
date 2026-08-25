@@ -2450,7 +2450,15 @@ static void render() {
     drawBanner();
     drawHintBar("any button  dismiss", "");
   } else if (vitalsUp) {
-    drawHintBar("any button  close", "hold BOOT  backlight");
+    // Nothing on the right, as on the banner, because the overlay is modal in
+    // the same way: the first press closes it and does nothing else, so every
+    // action that could be named here is one the press would not perform. It
+    // used to name the backlight hold, which was never true while the overlay
+    // was up — the hold closed the overlay and the level stayed where it was —
+    // and is now not even true of the page underneath, since the pomodoro page
+    // spends that hold on the timer. A hint bar advertising a button that does
+    // something else is worse than a hint bar with one thing on it.
+    drawHintBar("any button  close", "");
   } else if (page == PAGE_POMO) {
     // The one page where BOOT is not the refresh — there is nothing here to
     // fetch — and so the one page where the hold is not the backlight. Both
@@ -2463,8 +2471,9 @@ static void render() {
                                             : "BOOT  resume, hold  reset");
   } else {
     // Every other page in the cycle has data worth hurrying, so BOOT is the
-    // refresh. The backlight moved onto its hold, which is where the overlay
-    // says to find it.
+    // refresh, and the backlight is on its hold. Both halves of the bar are
+    // full at that, which is why the backlight is the one thing on this panel
+    // you have to be told about rather than read off it — see the README.
     drawHintBar("IO14  next, hold  vitals", "BOOT  refresh");
   }
 
