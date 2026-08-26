@@ -49,7 +49,9 @@ The vitals are behind a hold rather than in the cycle because every figure on
 them answers "is this thing working" — a question you ask on purpose after
 noticing something wrong, never one you answer in a glance. As a page they cost
 a press on every trip round to skip past three constants and two fields that
-read `--` whenever the link is the cable.
+read `--` whenever the link is the cable. Any button closes the overlay and does
+nothing else, which is also why its hint bar names no other button: an action
+printed there would be one the press would not perform.
 
 ## Two questions, two ramps
 
@@ -637,6 +639,15 @@ the brightness — a machine can be woken by a notification, while a pomodoro on
 starts because a finger started it, so it is the better evidence of the two that
 somebody is here.
 
+Both raises above stand aside for it too, and the full window is why. It stays
+true for hours and its return path waits on the condition passing rather than on
+any clock, so a raise landing three minutes into a block of work held the panel
+on the usage page for the remaining twenty-two and handed the countdown back
+after the banner had already announced the block was over. The conditions are
+cleared rather than stepped around, so anything still true when the clock stops
+is raised then — as far as the raises are concerned, the timer stopping is the
+condition arriving.
+
 The two part company below that. The core columns go up on the answering test
 alone, because an unattended build on a Mac with its screens off is running
 *now*, and that is worth raising for whoever comes back to find out what it did.
@@ -677,6 +688,19 @@ loop() legitimately does is a weather fetch over WiFi, which blocks inside
 HTTPClient where there is no callback to feed from. A watchdog that trips on a
 slow morning is one that gets switched off. Requests over the USB link are fed
 throughout by the same idle hook that keeps the clock moving.
+
+That budget is spent per *request*, and it took a restart to make the
+distinction. Thirty seconds was measured against one blocking fetch of about
+eight, but a pass can carry five: the four host services and the forecast come
+due on timers of their own and coincide by arithmetic, and a link that has just
+come up clears three of them together on purpose — so the pass right after the
+USB bridge stands down for an upload chains them by design. On the radio, with
+the Mac's LAN address answering nothing, that is four connect timeouts and a TLS
+handshake with nothing feeding anything, and the panel restarted itself for
+doing its job. So the WiFi path calls the same idle hook on the way into each
+request and on the way out. The clock still stops for the length of a request;
+what it no longer does is add five of them together against a budget sized for
+one.
 
 A restart it did not choose raises a banner, the same one the Mac uses to
 interrupt you, because the alternative is learning nothing: a watchdog that
@@ -747,10 +771,12 @@ Nothing outstanding. Things worth knowing about the shape of it:
   reading the ports; it would not survive someone watching the traffic. TLS
   would mean a certificate to mint and renew for a device with no clock at
   boot, which is a worse trade for what is on the wire.
-- `net_link`'s idle hook only covers the USB path. A fetch over WiFi blocks
-  inside HTTPClient, which offers no callback, so the clock does stop for the
-  length of a slow weather fetch on the radio. The watchdog timeout is sized
-  around exactly that.
+- `net_link`'s idle hook cannot get *inside* the WiFi path. HTTPClient offers no
+  callback, so the clock does stop for the length of a slow weather fetch on the
+  radio; the hook is called either side of each request instead, which is enough
+  to keep a pass carrying several of them inside the watchdog budget but is not
+  the same as the panel staying live through one. The USB path has no such
+  problem — it is fed from within its own wait.
 
 ## License
 
