@@ -1113,6 +1113,21 @@ static bool autoPickPage() {
   // what brings you back to it from wherever you had left the panel.
   bool answering = macAnswering();
   bool busy = answering && macBusy(), tight = awake && usageTight();
+
+  // Neither of them interrupts a timer that is running. Both borrow the screen
+  // for something the panel noticed by itself, and the timer is the one thing
+  // on this panel that was asked for out loud — the minutes left are what the
+  // button was pressed to be able to see. The full window is the sharper case:
+  // it stays true for hours, so a raise landing inside a block of work would
+  // hold the panel off the countdown for the rest of the block and give it back
+  // some time after the banner had already said the block was over.
+  //
+  // Cleared rather than stepped around, so that the marks below clear with
+  // them. A condition still true when the clock stops is raised then, exactly
+  // as one still true when a hold expires is: as far as this is concerned, the
+  // timer stopping is the condition arriving.
+  if (pomo.running) busy = tight = false;
+
   if (!busy)  busyShown = false;
   if (!tight) tightShown = false;
 
