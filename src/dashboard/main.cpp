@@ -96,6 +96,17 @@ static const int16_t SCR_H = 170;
 // inside HTTPClient, which offers no callback to feed from, for as long as its
 // own timeout allows plus whatever DNS and the TLS handshake take.
 //
+// Eight is one request, and a pass can carry five. The four host services and
+// the forecast come due on timers of their own and coincide by arithmetic —
+// and a link that has just come up clears three of them at once on purpose, so
+// the pass right after the USB bridge lets go of the port chains them by
+// design. On the radio, with the Mac's LAN address answering nothing, that is
+// four connect timeouts and a TLS handshake in one pass that never comes back
+// to feed anything: a wedged panel by this timer's reckoning and a working one
+// by every other. Which is why wifiGet() calls the same idle hook either side
+// of each request — the budget is spent per request, where it was measured,
+// rather than per pass, where it was not.
+//
 // The margin is deliberate and the number is not a guess at the average. A
 // watchdog that trips on a slow morning is a watchdog that gets switched off,
 // and then it is not protecting anything. Recovering a hung panel in half a

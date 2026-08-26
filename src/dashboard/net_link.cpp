@@ -225,7 +225,25 @@ bool wifiGet(const String &url, String &out, String &err, uint32_t timeout,
     return false;
   }
   http.setTimeout(timeout);
+  // A host that is not there has to cost what a slow one costs. Left unset, the
+  // connect falls back to WiFiClient's own default rather than the budget the
+  // caller asked for, so the one request nothing here counted on is the one to
+  // an address that stopped answering — which is the ordinary state of the
+  // Mac's LAN address, since that machine moves between networks.
+  http.setConnectTimeout((int32_t)timeout);
   if (token && *token) http.addHeader(TOKEN_HEADER, token);
+
+  // The USB path feeds the watchdog and redraws the panel from inside its own
+  // wait. This one cannot: HTTPClient offers nothing to hook, and the call
+  // below owns the CPU until it answers or gives up. So the hook is called on
+  // the way in and on the way out instead.
+  //
+  // That is not the clock ticking through the wait — it still stops for the
+  // length of the request — but it is what keeps a pass carrying several of
+  // them from adding up to a watchdog reset, because each one starts the timer
+  // afresh. loop() chains up to five, and clears three of them together every
+  // time a link comes up. See the watchdog note in main.cpp.
+  if (idleHook) idleHook();
 
   int status = http.GET();
   if (status != HTTP_CODE_OK) {
@@ -237,8 +255,12 @@ bool wifiGet(const String &url, String &out, String &err, uint32_t timeout,
   // getString(), not getStream() — Open-Meteo answers with Transfer-Encoding:
   // chunked, and only getString() strips the chunk framing. Feeding the raw
   // stream to ArduinoJson makes it choke on the leading chunk-size line.
+  if (idleHook) idleHook();
+
   out = http.getString();
   http.end();
+
+  if (idleHook) idleHook();
   return true;
 }
 
