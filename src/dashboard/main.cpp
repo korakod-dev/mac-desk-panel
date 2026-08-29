@@ -54,6 +54,7 @@
 //    A   toggle automatic page selection
 //    V   toggle the vitals overlay
 //    P   start or pause the pomodoro timer
+//    R   clear the pomodoro set, back to a first block not yet started
 // ---------------------------------------------------------------------------
 
 #include <Arduino.h>
@@ -216,7 +217,13 @@ static void useFont(const uint8_t *font) {
 // stopped being a page and took the backlight toggle with it. A hold is the
 // cheapest way to find a third and fourth action on a board with no third
 // button.
-enum class Press : uint8_t { None, Short, Long };
+//
+// The pomodoro page wants a fifth, and takes it by going further down the same
+// hold rather than by inventing a gesture: a second stop three seconds in,
+// where the one action that throws away more than a phase sits. Depth is the
+// right axis for it — everything behind a hold on that page is something you
+// lose work to, and this loses the most.
+enum class Press : uint8_t { None, Short, Long, Held };
 
 class Button {
 public:
@@ -240,6 +247,7 @@ public:
       if (_stable) {
         _down  = now;
         _fired = false;
+        _held  = false;
       } else if (!_fired) {
         return Press::Short;
       }
@@ -249,16 +257,38 @@ public:
       _fired = true;
       return Press::Long;
     }
+
+    // The second stop fires on top of the first rather than instead of it: the
+    // finger passed that mark on the way down here and the panel has already
+    // acted on it. So whatever reads this has to be an action that overrides
+    // the shallower one, never one that needs it not to have happened.
+    if (_stable && _fired && !_held && now - _down >= HELD_MS) {
+      _held = true;
+      return Press::Held;
+    }
     return Press::None;
   }
+
+  // Where a hold stands while it is still in the finger, for a hint bar that
+  // has to name the stop it is about to reach. A hold with two stops in it is
+  // only usable if the screen says how far down the next one is; without these
+  // the depth would be remembered rather than read.
+  bool pastLong() const { return _stable && _fired && !_held; }
+  bool pastHeld() const { return _stable && _held; }
 
 private:
   // Long enough not to fire on a firm tap, short enough that the panel answers
   // before you wonder whether it noticed.
   static const uint32_t DEBOUNCE_MS = 25, HOLD_MS = 600;
 
+  // The second stop. Far enough past the first that nobody lands on it by
+  // holding a moment too long, close enough that the wait is not read as a
+  // hang — and the first stop has already answered on the screen by then, so
+  // these are not three seconds of nothing.
+  static const uint32_t HELD_MS = 3000;
+
   uint8_t  _pin;
-  bool     _raw = false, _stable = false, _fired = false;
+  bool     _raw = false, _stable = false, _fired = false, _held = false;
   uint32_t _changed = 0, _down = 0;
 };
 
@@ -930,6 +960,27 @@ static void pomoHold() {
     Serial.printf("[pomo] reset %s\n", phaseChip(pomo.phase));
   }
   pomo.armed = 0;
+}
+
+// BOOT, held past the first stop. The set is the one thing on this page the
+// hold above cannot reach: `done` counts blocks that ran their full length, and
+// pomoNext() clears it in exactly one place — the far side of the long break.
+// Since a skip does not earn, a set abandoned at two could not be walked to
+// that place either, and had no way back to the beginning short of pulling the
+// cable. A poor answer on the one page holding a state of its own.
+//
+// Deeper on the same hold rather than on a button of its own, because it is the
+// same kind of act as the two above it and throws away more than either: not a
+// phase but everything since the last long break, back to a first block not yet
+// started. The hint bar names it while the finger is still down, so the depth
+// is read off the screen the way the rest of this page is.
+static void pomoClearSet() {
+  pomo.done = 0;
+  pomoLoad(Phase::Focus, false);
+  // Cleared for the reason pomoHold() clears it: whoever held the button down
+  // for three seconds is standing at the panel and can pick their own page.
+  pomo.armed = 0;
+  Serial.println("[pomo] set cleared");
 }
 
 // Called every pass and from every page, because the timer is state rather than
@@ -2446,7 +2497,17 @@ static uint32_t lastDraw = 0;
 // set from inside pageFlip, because both of the places that redraw have to agree
 // about it and neither of them is the page.
 static uint32_t redrawEvery() {
-  return (page == PAGE_FLIP && flipping()) ? FLIP_FRAME_MS : 1000;
+  if (page == PAGE_FLIP && flipping()) return FLIP_FRAME_MS;
+
+  // A hold in flight is the other thing on the panel that has to be drawn while
+  // it happens rather than after. The hint bar names the stop the finger is
+  // heading for, and at a second's granularity that line would land late and
+  // sometimes not before the finger gave up — so the hold borrows the fold's
+  // frame rate for the couple of seconds it is in, the same way and for the
+  // same reason.
+  if (page == PAGE_POMO && btnAct.pastLong()) return FLIP_FRAME_MS;
+
+  return 1000;
 }
 
 static void render() {
@@ -2492,9 +2553,16 @@ static void render() {
     // what the hold will do from where the timer currently stands, because it
     // does two different things. The left drops the vitals to make room; they
     // are on the same hold from any of the other three pages.
-    drawHintBar("IO14  next", pomo.running  ? "BOOT  pause, hold  reset"
-                              : pomoFresh() ? "BOOT  start, hold  skip"
-                                            : "BOOT  resume, hold  reset");
+    //
+    // Mid-hold it stops naming the hold and starts naming the stop below it,
+    // which is the only reason a second stop is findable at all: nothing else
+    // on the panel could tell you that going on holding buys something more.
+    drawHintBar("IO14  next",
+                btnAct.pastHeld()   ? "set cleared"
+                : btnAct.pastLong() ? "keep holding  clear set"
+                : pomo.running      ? "BOOT  pause, hold  reset"
+                : pomoFresh()       ? "BOOT  start, hold  skip"
+                                    : "BOOT  resume, hold  reset");
   } else {
     // Every other page in the cycle has data worth hurrying, so BOOT is the
     // refresh, and the backlight is on its hold. Both halves of the bar are
@@ -2699,6 +2767,14 @@ void loop() {
       blManual = backlight > BL_ASLEEP ? BL_ASLEEP : BL_AWAKE;
     }
     lastDraw = 0;
+  } else if (actEv == Press::Held) {
+    // Only the timer has anything this far down. Everywhere else the first stop
+    // has already flipped the backlight and there is nothing deeper to reach
+    // for, so a finger left resting on the button goes on resting there.
+    if (page == PAGE_POMO) {
+      pomoClearSet();
+      lastDraw = 0;
+    }
   }
 
   // net::loop() also drives the serial reader, so it has to run before the
@@ -2719,6 +2795,10 @@ void loop() {
       // on is driven by a finger, which is no use to a script walking the pages
       // to photograph one mid-count.
       case 'P': pomoStartPause(); lastDraw = 0; break;
+      // The set's only way in from off the board. `P` can start and pause, but
+      // nothing out here could put the count back to the beginning, which is
+      // the state a script setting up a screenshot wants to start from.
+      case 'R': pomoClearSet(); lastDraw = 0; break;
       case 'A':
         autoPages = !autoPages;
         autoReturn = -1;

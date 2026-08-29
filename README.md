@@ -387,6 +387,7 @@ them with, and a length you can talk yourself into extending is not a timer.
 |---|---|
 | `BOOT` | start, pause, resume |
 | hold `BOOT` | reset the phase — or skip it, if nobody has started it yet |
+| keep holding, 3s | clear the set: back to a first block, not yet started |
 
 Two actions on one hold, told apart by what the timer is already doing, and the
 hint bar names the one it is about to do so the pair is read off the screen
@@ -395,6 +396,18 @@ nobody has touched is skipped instead, which is how the break you do not want,
 or the block you already did away from the desk, gets out of the way. Both are
 behind the hold because both throw something away. `P` on the console is the
 press, for a host that wants to drive it.
+
+**The set is on the same hold, further down.** Neither action above it touches
+the count, and the count clears itself in exactly one place — the far side of
+the long break. Since a skip does not earn its block, a set abandoned at two
+could not be walked to that place either: it had no way back to the beginning
+short of pulling the cable, on the one page here holding a state of its own.
+Three seconds in, the whole set goes. Deeper on the same hold rather than on a
+gesture of its own, because it is the same kind of act as the two above it and
+throws away more than either — and depth is the axis this page already sorts
+those by. At the first stop the hint bar stops naming the hold and starts naming
+the stop below it, which is the only reason a second stop is findable at all.
+`R` on the console does it without the finger.
 
 **A rest starts itself and a block of work does not.** That is the one asymmetry
 here and the useful one: five minutes that begin when you notice the banner are
@@ -510,9 +523,11 @@ while somebody is at the Mac, the flip clock once nobody is.
 | `A` | toggle automatic page selection |
 | `V` | toggle the vitals overlay |
 | `P` | start or pause the pomodoro timer |
+| `R` | clear the pomodoro set |
 
-`V` and `P` exist because their own way in is a finger on a button, which is no
-use to a host trying to photograph an overlay or a timer mid-count.
+`V`, `P` and `R` exist because their own way in is a finger on a button, which
+is no use to a host trying to photograph an overlay or a timer mid-count — or
+one that wants the set at a known count before it starts.
 
 While the bridge is running it owns the serial port, so `grab_screen.py` talks
 to the bridge's passthrough socket instead. Uploads pause the bridge
