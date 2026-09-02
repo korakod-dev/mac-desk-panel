@@ -1176,19 +1176,32 @@ static bool autoPickPage() {
   bool answering = macAnswering();
   bool busy = answering && macBusy(), tight = awake && usageTight();
 
-  // Neither of them interrupts a timer that is running. Both borrow the screen
-  // for something the panel noticed by itself, and the timer is the one thing
-  // on this panel that was asked for out loud — the minutes left are what the
-  // button was pressed to be able to see. The full window is the sharper case:
-  // it stays true for hours, so a raise landing inside a block of work would
-  // hold the panel off the countdown for the rest of the block and give it back
-  // some time after the banner had already said the block was over.
+  // Neither of them interrupts a timer that is somebody's business. Both borrow
+  // the screen for something the panel noticed by itself, and the timer is the
+  // one thing on this panel that was asked for out loud — the minutes left are
+  // what the button was pressed to be able to see. The full window is the
+  // sharper case: it stays true for hours, so a raise landing inside a block of
+  // work would hold the panel off the countdown for the rest of the block and
+  // give it back some time after the banner had already said the block was
+  // over.
+  //
+  // Against pomoEngaged() rather than pomo.running, because a phase loaded and
+  // waiting for a finger needs the page more than a running one does, not less.
+  // A running clock only wants watching; a waiting one wants pressing, and BOOT
+  // is the timer's button on this page alone — anywhere else in the cycle it is
+  // the refresh. So the gap between the two tests was the whole of the break:
+  // the panel came back to rest on the timer when the banner went down, was
+  // pulled off it on the very next pass, and the press meant to start the next
+  // block landed on a page that answered it by refetching something.
   //
   // Cleared rather than stepped around, so that the marks below clear with
-  // them. A condition still true when the clock stops is raised then, exactly
+  // them. A condition still true when the timer lets go is raised then, exactly
   // as one still true when a hold expires is: as far as this is concerned, the
-  // timer stopping is the condition arriving.
-  if (pomo.running) busy = tight = false;
+  // timer letting go is the condition arriving. Letting go is the clock
+  // stopping, a phase paused by hand — pomoStartPause() disarms it, because
+  // whoever paused it is standing here — or a phase nobody came back to start
+  // running out its ten minutes of holding the page.
+  if (pomoEngaged()) busy = tight = false;
 
   if (!busy)  busyShown = false;
   if (!tight) tightShown = false;

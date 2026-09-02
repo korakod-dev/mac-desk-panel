@@ -644,8 +644,9 @@ that stopped arriving, so a full window found then is a reading from before it
 went, and leaving the clock for it would be old news presented as if it had just
 happened, at exactly the hours the clock is what the panel is for.
 
-A running pomodoro outranks both, and is the only page here chosen by something
-the panel was *told* rather than something it observed: somebody pressed a
+A pomodoro outranks both — running, or loaded and still inside the ten minutes
+it waits for a finger in — and is the only page here chosen by something the
+panel was *told* rather than something it observed: somebody pressed a
 button to start it, which is a stronger statement about what is worth showing
 than any reading off the Mac, and the minutes left are what they pressed it to
 be able to see. It gives the page back when the clock stops, or ten minutes
@@ -658,10 +659,23 @@ Both raises above stand aside for it too, and the full window is why. It stays
 true for hours and its return path waits on the condition passing rather than on
 any clock, so a raise landing three minutes into a block of work held the panel
 on the usage page for the remaining twenty-two and handed the countdown back
-after the banner had already announced the block was over. The conditions are
-cleared rather than stepped around, so anything still true when the clock stops
-is raised then — as far as the raises are concerned, the timer stopping is the
-condition arriving.
+after the banner had already announced the block was over.
+
+They stand aside for the waiting phase as well as the running one, which matters
+more than it sounds: a phase loaded and waiting needs the page more than a
+running one does, not less. A running clock only wants watching; a waiting one
+wants pressing, and BOOT is the timer's button on this page alone — anywhere
+else in the cycle it is the refresh. Standing aside only for a running clock
+left the gap exactly where the break is: the panel came back to rest on the
+timer when the break-over banner went down, was pulled off it on the very next
+pass, and the press meant to start the next block landed on a page that answered
+it by refetching something.
+
+The conditions are cleared rather than stepped around, so anything still true
+when the timer lets go is raised then — as far as the raises are concerned, the
+timer letting go is the condition arriving. Letting go is the clock stopping, a
+phase paused by hand, or a phase nobody came back to start running out its ten
+minutes of holding the page.
 
 The two part company below that. The core columns go up on the answering test
 alone, because an unattended build on a Mac with its screens off is running
