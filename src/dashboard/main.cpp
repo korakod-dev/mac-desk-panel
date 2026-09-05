@@ -638,6 +638,21 @@ static const char *macRestLabel() {
   return macScreensOn() ? nullptr : "sleep";
 }
 
+// It blinks, in the red the rest of the panel keeps for things that are wrong.
+// A sleeping Mac is not wrong — it is the ordinary state of that machine for
+// two thirds of the day — so this is the one place here where the severity ramp
+// is spent on something that is merely worth being certain of. Asked for on
+// purpose: the panel dimming on its own is the symptom of half a dozen things,
+// and the one question worth answering at a glance across the room is whether
+// the machine really went to sleep or the panel merely lost sight of it.
+//
+// Half a second either way. Slow enough not to strobe on a panel somebody is
+// sitting next to all evening, fast enough that it is unmistakably blinking
+// rather than a word that happens to be missing.
+static const uint32_t SLEEP_BLINK_MS = 500;
+
+static bool sleepBlinkOn() { return (millis() / SLEEP_BLINK_MS) % 2 == 0; }
+
 static bool fetchMac() {
   if (!net::online()) {
     mac.error = "not connected";
@@ -1546,11 +1561,10 @@ static void drawStatusBar(const struct tm *now, bool timeValid) {
 
   // Beside the link rather than anywhere else on the bar, because the two are
   // read together: the link says whether the panel can still see the Mac, and
-  // this says what it sees. Dim, at the weight of the hint bar — it is a
-  // standing fact about the room, not a warning, and it should be findable
-  // without being the first thing the eye lands on.
-  if (const char *why = macRestLabel()) {
-    fb.setTextColor(C_DIM, C_BAR);
+  // this says what it sees. Drawn only on the lit half of the blink — the bar is
+  // filled fresh every pass, so leaving it out is the whole of the dark half.
+  if (const char *why = macRestLabel(); why && sleepBlinkOn()) {
+    fb.setTextColor(C_ERR, C_BAR);
     fb.drawString(why, 6 + fb.textWidth(net::viaName()) + 7, BAR_TOP / 2);
   }
 
@@ -2592,6 +2606,14 @@ static uint32_t redrawEvery() {
   // frame rate for the couple of seconds it is in, the same way and for the
   // same reason.
   if (page == PAGE_POMO && btnAct.pastLong()) return FLIP_FRAME_MS;
+
+  // The sleep word is the third, and the only one of the three that is not over
+  // in a couple of seconds: it blinks for as long as the Mac stays under, which
+  // is all night. So it takes the least frame rate that keeps the blink honest
+  // rather than the fold's — half the blink period, so each edge lands within
+  // half a phase of where it belongs, and the panel spends three redraws a
+  // second on this instead of twenty-five.
+  if (macRestLabel()) return SLEEP_BLINK_MS / 2;
 
   return 1000;
 }

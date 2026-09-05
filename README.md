@@ -798,8 +798,15 @@ get from this side of the cable. The reverse does not hold: `WiFi` is equally
 what an unplugged cable or a stopped bridge looks like.
 
 Beside that word, and only once the panel has stopped believing anybody is at
-the Mac, is **`sleep`**. It is the one state here the panel will name out loud,
-and it is read off the screens rather than off the silence: the last thing the
+the Mac, is **`sleep`**, blinking in red at half a second either way. It is the
+one state here the panel will name out loud — and the one place the severity
+ramp is spent on something that is not severe, because a Mac being asleep is the
+ordinary state of that machine for two thirds of the day. The question it
+answers is worth the loudness anyway: the panel dimming on its own is the
+symptom of half a dozen things, and whether the machine really went under or the
+panel merely lost sight of it is the one worth settling from across the room.
+
+It is read off the screens rather than off the silence: the last thing the
 Mac said about its displays, which a failed fetch leaves standing. That is what
 carries it through the machine going all the way under — the screens go dark and
 the Mac says so, and the host goes quiet some minutes later with that reading
