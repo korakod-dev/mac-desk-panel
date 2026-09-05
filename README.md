@@ -390,12 +390,12 @@ are kept here:
 
 Copy them to `~/.claude/` and point `settings.json` at them.
 
-### The usage page on a phone
+### The panel on a phone
 
-`tools/panel_web/` is the usage page again, as a web page, for the times the
-panel is not the thing in front of you. Double-click **`usage-panel.command`**
-in Finder and open the address it prints on the phone; close that Terminal
-window and it is gone. No launch agent, nothing left listening.
+`tools/panel_web/` is the panel again, as one web page, for the times it is not
+the thing in front of you. Double-click **`usage-panel.command`** in Finder and
+open the address it prints on the phone; close that Terminal window and it is
+gone. No launch agent, nothing left listening.
 
 Run `tools/panel_web/install.sh` once first, from a shell that can read this
 repo. It is the wall the launch agent for `usage_server.py` hit, in a new
@@ -407,33 +407,48 @@ explains and no `chmod` moves. The installer puts the copy that actually runs
 under `~/Library/Application Support/`, which nothing guards, and the launcher
 falls through to it. Double-click the one in there; an *alias* of it will
 follow, a copy on the Desktop lands back behind the same wall. Re-run the
-installer after editing either file — the installed copy is a copy.
+installer after editing either file, or after moving house — the installed copy
+is a copy, and `panel.json`, which is where `WEATHER_LAT` and the rest end up
+once `include/secrets.h` is out of reach, is copied at the same moment.
 
-It is a second view, not a second source. `usage_server.py` already holds the
-reading and is already up, so `serve.py` serves one HTML file and proxies
-`/usage` through to `127.0.0.1:8787` — which is also the whole reason the proxy
-exists rather than the page fetching that port itself. Two things would stop
-it: `usage_server` refuses requests from off the machine without
-`X-Panel-Token`, and a browser opening a URL cannot send a header; and a page
-on one port fetching another is cross-origin, which `usage_server` sends no
+It is a second view, not a second source. `usage_server.py` and
+`mac_stats_server.py` already hold the readings and are already up, so
+`serve.py` serves one HTML file and fetches from them on the page's behalf —
+the same errand `usb_net_bridge.py` runs for the panel, and it holds each
+reading for as long as the panel would, so a page polling every two seconds
+costs one loopback request at most and usually none. Going through it is not a
+convenience. Both servers refuse requests from off the machine without
+`X-Panel-Token` and a browser opening a URL cannot send a header; and a page on
+`:8791` fetching `:8787` is cross-origin, which neither server sends the
 headers to permit. Fetched from the server the page came from, both questions
-stop being asked, and the token never leaves the Mac.
+stop being asked and the token never leaves the Mac. The weather goes the same
+way for a third reason: a phone on the Mac's own hotspot has no route to the
+internet, and the Mac does.
 
-The page is the panel: a 320×170 canvas drawn with the arithmetic in
-`main.cpp`, scaled up to whatever the phone gives it, colours kept in RGB565
-until they are written out so `shade()` there rounds where `shade()` here does,
-and the type served off the same server as the face the `.vlw` fonts were baked
-from. Three things are honestly different, because on a phone they have to be.
-The status bar says `HTTP` or `OFFLINE` where the panel says `USB` or `WiFi`.
-The four page dots are drawn and lit as the panel lights them, but there is
-nowhere to go — this is the one page. And the hint bar names a tap, because the
-buttons it would otherwise name are not on the thing you are holding.
+The page is the panel: a 320-wide canvas drawn with the arithmetic in
+`main.cpp`, colours kept in RGB565 until they are written out so `shade()`
+there rounds where `shade()` here does, the type served off the same server as
+the face the `.vlw` fonts were baked from, and the fold when a minute turns
+borrowing a faster frame for the third of a second it is in flight exactly as
+the panel does.
+
+What differs is the height, and it is the only thing that had to. The panel has
+320×170 and shows one page of four; a phone has the room for three of them at
+once, so the clock, the two windows and the Mac are stacked rather than cycled —
+and the page dots that said which page you were on went with the cycling. Three
+smaller things follow from being a phone rather than a panel: the status bar
+says `HTTP` or `OFFLINE` where the panel says `USB` or `WiFi`; the hint bar
+names a tap, because the buttons it would otherwise name are not on the thing
+you are holding; and the panel's own vitals are not there and cannot be, since
+the heap, the PSRAM, the RSSI and the boot reason are the ESP32's and nothing
+on this side knows them. The pomodoro is not there either, for a better reason
+than room — it is the one page holding a state of its own, and a second copy of
+that state on a phone would be a second timer, not a second view of one.
 
 What the phone gets it gets over plain HTTP with no token, so anyone on the
-network can read it. That is percentages and reset times and nothing else, and
-posting is not on this server at all — but it is worth knowing before running
-it on a network you do not own. It needs the Mac awake: a dark screen is fine,
-a sleeping machine is not.
+network can read it: the usage percentages, the reset times, and this Mac's
+charge, memory, disk and cores. Posting a notification is not on this server at
+all. It needs the Mac awake — a dark screen is fine, a sleeping machine is not.
 
 ## The pomodoro page
 

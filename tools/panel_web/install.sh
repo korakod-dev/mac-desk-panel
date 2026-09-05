@@ -10,7 +10,8 @@
 #
 # Run this from a shell that can read the repo -- your own terminal if it has
 # been granted the Desktop, or whatever is already editing these files.
-# Re-run it after changing serve.py or index.html; the installed copy is a copy.
+# Re-run it after changing serve.py or index.html, or after moving house; the
+# installed copy is a copy, panel.json included.
 
 set -e
 
@@ -23,6 +24,23 @@ cp "$SRC/index.html"           "$DEST/"
 cp "$SRC/usage-panel.command"  "$DEST/"
 cp "$SRC/../fonts/IBMPlexSansThai-Regular.ttf" "$DEST/"
 chmod +x "$DEST/usage-panel.command"
+
+# Where the weather is. The panel gets it out of include/secrets.h at compile
+# time; the installed server is not next to that file and could not read it
+# there anyway, so the four values are lifted into panel.json here. Same source,
+# read once, at the one moment something can still see both.
+/usr/bin/python3 - "$SRC" "$DEST" <<'PY'
+import json, os, sys
+sys.path.insert(0, sys.argv[1])
+import serve
+
+if serve.PLACE:
+    with open(os.path.join(sys.argv[2], "panel.json"), "w") as f:
+        json.dump(serve.PLACE, f, indent=2)
+    print("weather: %s" % (serve.PLACE.get("place") or "configured"))
+else:
+    print("weather: no WEATHER_LAT in include/secrets.h -- the line will say so")
+PY
 
 echo "installed to:"
 echo "    $DEST"

@@ -1,22 +1,28 @@
 #!/usr/bin/env python3
-"""Serve the panel's usage page to a phone on the same network.
+"""Serve the panel, as one page, to a phone on the same network.
 
-The same two windows the T-Display-S3 draws on its usage page, drawn the same
-way, off the same reading -- for the times the panel is not the thing in front
-of you.
+What the T-Display-S3 shows across three of its pages -- the flip clock and the
+weather under it, the two Claude Code windows, the Mac's charge and cells and
+cores -- drawn the same way, off the same readings, on one page tall enough for
+a phone to hold all of it at once. The panel cycles because it has 320x170 and
+one of them at a time; a phone has the height, so nothing here has to be a page.
 
-It is deliberately not a second source of anything. usage_server.py already
-holds the reading and already runs (a launch agent keeps it up on :8787); this
-serves one HTML file and proxies that server's /usage through to it. Two
-reasons for the proxy rather than letting the page fetch :8787 itself:
+It is deliberately not a second source of anything. usage_server.py and
+mac_stats_server.py already hold the readings and are already up; this serves
+one HTML file and fetches from them on the page's behalf, which is the same
+errand tools/usb_net_bridge.py runs for the panel. Two reasons for going
+through here rather than letting the page fetch those ports itself:
 
-  - usage_server refuses requests from off the machine unless they carry
+  - both servers refuse requests from off the machine unless they carry
     X-Panel-Token, and a browser opening a URL cannot send a header. Fetched
-    from here the request arrives from loopback, which it already trusts, so
+    from here the requests arrive from loopback, which they already trust, so
     the token is never needed and never leaves the Mac.
 
-  - a page served from :8791 fetching :8787 is cross-origin, and usage_server
-    sends no CORS headers. Same origin, nothing to add.
+  - a page served from :8791 fetching :8787 is cross-origin, and neither server
+    sends CORS headers. Same origin, nothing to add.
+
+The weather goes through here too, for a third reason: a phone on the Mac's own
+hotspot has no route to the internet of its own, and the Mac does.
 
 Started by double-clicking usage-panel.command, and meant to die with the
 window that opened it: no launch agent, no daemon, nothing still listening
@@ -34,7 +40,10 @@ import re
 import signal
 import subprocess
 import sys
+import threading
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -56,32 +65,212 @@ def font_path():
     return None
 
 USAGE_URL = "http://127.0.0.1:8787/usage"
+MAC_URL   = "http://127.0.0.1:8789/mac"
+CPU_URL   = "http://127.0.0.1:8789/cpu"
+WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
 
 # Long enough for the live reading, which is the host going and asking the API:
 # usage_server gives up on that at 1.5s, so this is that plus the loopback trip.
 UPSTREAM_TIMEOUT = 3.0
 
+# The one fetch that leaves the machine, so the one that gets a real timeout.
+WEATHER_TIMEOUT = 8.0
+
 DEFAULT_PORT = 8791
 
+# How long each reading is held before it is asked for again. These are the
+# panel's own intervals, and they are here rather than in the page for the
+# reason the bridge exists at all: one client asking every couple of seconds
+# should not become four requests a second against two servers and a weather
+# API. The page polls; this decides what a poll actually costs.
+#
+# Usage is the odd one. usage_server holds the API to one call every 25s
+# whatever is asked of it, so asking more often than that buys nothing -- and
+# 20 here means the next poll after its gate opens is the one that gets through.
+TTL = {"usage": 20, "mac": 4, "cpu": 1, "weather": 600}
 
-def fetch_usage(live):
-    """usage_server's answer, or a reason it could not be had.
+# A weather fetch that failed is retried on the panel's own schedule rather than
+# the successful one's: a minute, not ten.
+WEATHER_RETRY = 60
 
-    A failure comes back as a 200 carrying `error` rather than as an HTTP
-    error, because the page renders it the way the panel does -- as a line of
-    text where the numbers would be -- and a fetch that rejects gives it
-    nothing to render.
-    """
-    url = USAGE_URL + ("?live=1" if live else "")
+
+# --- where the weather is ------------------------------------------------------
+
+# The panel reads these out of include/secrets.h at compile time. The installed
+# copy of this server is not next to that file and could not read it there
+# anyway -- ~/Desktop is TCC-protected -- so install.sh lifts the four values
+# into panel.json beside serve.py. Running out of the repo, the header itself is
+# still the better source: no install step to forget after moving house.
+CONFIG = os.path.join(HERE, "panel.json")
+SECRETS = os.path.join(HERE, os.pardir, os.pardir, "include", "secrets.h")
+
+
+def load_place():
+    """Latitude, longitude, timezone and name, or None if nothing says."""
     try:
-        with urllib.request.urlopen(url, timeout=UPSTREAM_TIMEOUT) as r:
+        with open(CONFIG) as f:
+            cfg = json.load(f)
+        if "lat" in cfg and "lon" in cfg:
+            return cfg
+    except (OSError, ValueError):
+        pass
+    return parse_secrets(SECRETS)
+
+
+def parse_secrets(path):
+    try:
+        with open(path) as f:
+            text = f.read()
+    except OSError:
+        return None
+
+    def define(name, pattern):
+        m = re.search(r"^\s*#define\s+%s\s+%s" % (name, pattern), text, re.M)
+        return m.group(1) if m else None
+
+    lat = define("WEATHER_LAT", r"(-?[\d.]+)")
+    lon = define("WEATHER_LON", r"(-?[\d.]+)")
+    if lat is None or lon is None:
+        return None
+    return {
+        "lat": float(lat),
+        "lon": float(lon),
+        "tz": define("WEATHER_TZ_URL", r'"([^"]*)"') or "auto",
+        "place": define("WEATHER_PLACE", r'"([^"]*)"') or "",
+    }
+
+
+PLACE = load_place()
+
+
+# --- the readings ---------------------------------------------------------------
+
+def get_json(url, timeout, what):
+    """A JSON body, or a dict saying why there is not one.
+
+    Failures come back as data rather than as exceptions for the reason the
+    panel draws them: an error belongs on the page, in the space the numbers
+    would have had, and a fetch that raises gives the page nothing to draw.
+    """
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        return {"error": "usage server said %d" % exc.code}
+        return {"error": "%s said %d" % (what, exc.code)}
     except (urllib.error.URLError, OSError):
-        return {"error": "usage server not running"}
-    except (ValueError, json.JSONDecodeError):
-        return {"error": "bad reply from usage server"}
+        return {"error": "%s not answering" % what}
+    except ValueError:
+        return {"error": "bad reply from %s" % what}
+
+
+def fetch_usage():
+    return get_json(USAGE_URL + "?live=1", UPSTREAM_TIMEOUT, "usage server")
+
+
+def fetch_mac():
+    return get_json(MAC_URL, UPSTREAM_TIMEOUT, "mac server")
+
+
+def fetch_cpu():
+    return get_json(CPU_URL, UPSTREAM_TIMEOUT, "mac server")
+
+
+def fetch_weather():
+    """Current conditions, exactly the three fields the panel asks for.
+
+    Nothing more is requested for the same reason the firmware stopped
+    requesting it: the humidity, the wind and the daily high and low left the
+    panel when the separate weather page did, and an unread field is still a
+    field somebody has to wait for.
+    """
+    if not PLACE:
+        return {"error": "no location configured"}
+
+    url = WEATHER_URL + "?" + urllib.parse.urlencode({
+        "latitude": PLACE["lat"],
+        "longitude": PLACE["lon"],
+        "current": "temperature_2m,apparent_temperature,weather_code",
+        "forecast_days": 1,
+    }) + "&timezone=" + PLACE["tz"]
+
+    got = get_json(url, WEATHER_TIMEOUT, "open-meteo")
+    if "error" in got:
+        return got
+
+    cur = got.get("current") or {}
+    if "temperature_2m" not in cur:
+        return {"error": "no conditions reported"}
+    return {
+        "temp": cur.get("temperature_2m"),
+        "feels": cur.get("apparent_temperature"),
+        "code": cur.get("weather_code", -1),
+        "place": PLACE.get("place", ""),
+    }
+
+
+# --- holding them ---------------------------------------------------------------
+
+# One lock over the lot rather than one per reading. Every fetch behind it is
+# either loopback or ten minutes apart, the page is one client, and a second
+# request arriving mid-fetch is better made to wait for the answer than sent to
+# ask the same question again.
+_lock = threading.Lock()
+_held = {}   # name -> {"at": monotonic, "data": ...}
+
+
+def reading(name, fetch):
+    """The held answer, or a fresh one once it has aged past its TTL.
+
+    A weather fetch that fails keeps whatever last worked and comes back to it
+    in a minute instead of ten -- the panel's own rule. The two local ones have
+    nothing to hold on to: a Mac that stopped answering has no old charge worth
+    reporting, and saying so is what lets the page age the numbers it still has
+    on its own terms.
+    """
+    now = time.monotonic()
+    held = _held.get(name)
+
+    if held is not None:
+        ttl = TTL[name]
+        if name == "weather" and "error" in held["data"] :
+            ttl = WEATHER_RETRY
+        if now - held["at"] < ttl:
+            return held["data"], round(now - held["at"])
+
+    fresh = fetch()
+
+    # A failed weather fetch does not throw away a reading that worked: it is
+    # ten minutes old at worst and the temperature outside has not moved much.
+    if name == "weather" and "error" in fresh and held is not None \
+            and "error" not in held["data"]:
+        _held[name] = {"at": now - WEATHER_RETRY, "data": held["data"]}
+        return held["data"], round(now - held["at"])
+
+    _held[name] = {"at": now, "data": fresh}
+    return fresh, 0
+
+
+def state():
+    """Everything the page draws, in one answer.
+
+    One request rather than four, because they are drawn together: a page that
+    fetched them separately would show a charge from one moment beside cores
+    from another, and on a phone each of those is a radio wake-up.
+    """
+    with _lock:
+        usage, _ = reading("usage", fetch_usage)
+        mac, _ = reading("mac", fetch_mac)
+        cpu, _ = reading("cpu", fetch_cpu)
+        weather, wage = reading("weather", fetch_weather)
+
+    # The two local servers date their own snapshots and the page adds the time
+    # since; the weather has no such field of its own, so its age is how long
+    # this has been holding it.
+    if "error" not in weather:
+        weather = dict(weather, age=wage)
+
+    return {"now": int(time.time()), "usage": usage, "mac": mac,
+            "cpu": cpu, "weather": weather}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -127,10 +316,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send_error(404, "font not installed beside the server")
 
-        elif route == "/api/usage":
-            live = "live=1" in self.path.partition("?")[2].split("&")
-            body = json.dumps(fetch_usage(live)).encode()
-            self.reply(200, "application/json", body)
+        elif route == "/api/state":
+            self.reply(200, "application/json", json.dumps(state()).encode())
 
         else:
             self.send_error(404)
@@ -175,7 +362,7 @@ def local_hostname():
 
 def banner(port):
     print()
-    print("  T-Display-S3 · Claude Code usage")
+    print("  T-Display-S3 · desk panel")
     print()
     print("  On your phone, open:")
     for ip in local_addresses():
@@ -184,8 +371,12 @@ def banner(port):
     if host:
         print("      http://%s:%d      (if the network passes Bonjour)" % (host, port))
     print()
-    print("  Anyone on this network can read the page -- it is percentages")
-    print("  and reset times, no token and no credentials.")
+    print("  Anyone on this network can read the page -- percentages, reset")
+    print("  times and this Mac's vitals. No token and no credentials.")
+    if not PLACE:
+        print()
+        print("  No location configured, so the weather line will say so.")
+        print("  Re-run install.sh, or check WEATHER_LAT in include/secrets.h.")
     print()
     print("  Close this window, or press Ctrl-C, to take it down.")
     print(flush=True)
