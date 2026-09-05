@@ -537,6 +537,142 @@ def banner(port):
     print(flush=True)
 
 
+# --- a copy that outlived its window ------------------------------------------
+#
+# Closing the Terminal window is the documented way to stop this and it is what
+# normally happens: the window sends a hangup, the server unbinds, the port is
+# free. What is left over is the cases where it did not -- started from
+# somewhere that is not a window, or a "Terminate running process?" that got
+# cancelled -- and the symptom is a double-click that dies on "Address already
+# in use" while a browser somewhere goes on being served by a copy nobody can
+# find.
+#
+# Finding it is three lines of lsof and the fix is one signal, so the launcher
+# does it rather than printing a command for somebody to type. Asked first,
+# though: a running server has a page open on the other end of it, and killing
+# somebody's timer to save them a paste is not the trade.
+
+def port_holders(port):
+    """(pid, command line) for whatever is listening on the port."""
+    try:
+        pids = subprocess.run(
+            ["/usr/sbin/lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN", "-t"],
+            capture_output=True, text=True, timeout=5).stdout.split()
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    found = []
+    for pid in pids:
+        try:
+            cmd = subprocess.run(["/bin/ps", "-o", "command=", "-p", pid],
+                                 capture_output=True, text=True, timeout=5)
+            found.append((int(pid), cmd.stdout.strip()))
+        except (OSError, ValueError, subprocess.SubprocessError):
+            continue
+    return found
+
+
+# Ours, whether it was started from the installed copy or out of the repo. The
+# two directories differ by a hyphen and an underscore, which is the only reason
+# this is a pattern rather than a path.
+OURS = re.compile(r"panel[-_]web/serve\.py")
+
+
+def ask(question):
+    """Yes by default, and no at all when there is nobody to ask -- a launcher
+    run from a script should report the collision, not resolve it."""
+    if not sys.stdin.isatty():
+        return False
+    try:
+        return input("%s [Y/n] " % question).strip().lower() in ("", "y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+
+def pause():
+    if not sys.stdin.isatty():
+        return
+    print("\nPress Return to close.")
+    try:
+        input()
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+
+def listen(port):
+    return ThreadingHTTPServer(("0.0.0.0", port), Handler)
+
+
+def listen_within(port, seconds):
+    """The port does not come free the instant the signal is sent -- the other
+    process has a socket to close and a `finally` to run first."""
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            return listen(port)
+        except OSError:
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.15)
+
+
+def take_over(port, exc):
+    """A listening socket once whatever was holding the port has let go, or
+    None -- having said why, and what to type if this could not do it."""
+    holders = port_holders(port)
+    mine = [(pid, cmd) for pid, cmd in holders if OURS.search(cmd)]
+
+    if not mine:
+        print("cannot listen on port %d: %s" % (port, exc))
+        if holders:
+            print("\nsomething else is using it:")
+            for pid, cmd in holders:
+                print("    pid %d  %s" % (pid, cmd))
+        else:
+            print("something else is using it, and lsof cannot see what.")
+        # Not ours, so not this launcher's to stop -- naming it and the one
+        # command that frees the port is as far as this should go.
+        print("\nThat is not this panel, so it is left alone. To free the port:")
+        print("    lsof -ti tcp:%d | xargs kill" % port)
+        print("\nOr run this from a terminal with a port of its own:")
+        print("    '%s' %d" % (os.path.abspath(sys.argv[0] or "serve.py"), port + 1))
+        pause()
+        return None
+
+    for pid, _ in mine:
+        print("A copy of this panel is already serving on port %d (pid %d)."
+              % (port, pid))
+    print("Whatever has the page open is still being served by it.")
+
+    if not ask("Stop it and take over?"):
+        print("\nLeft alone. The panel already open stays up; this window is done.")
+        pause()
+        return None
+
+    for how in (signal.SIGTERM, signal.SIGKILL):
+        for pid, _ in mine:
+            try:
+                os.kill(pid, how)
+            except ProcessLookupError:
+                pass          # already gone, which is the outcome asked for
+            except PermissionError:
+                print("\npid %d belongs to someone else and cannot be stopped "
+                      "from here." % pid)
+                pause()
+                return None
+        server = listen_within(port, 5 if how is signal.SIGTERM else 3)
+        if server:
+            return server
+        if how is signal.SIGTERM:
+            print("It did not stop when asked. Insisting.")
+
+    print("\nThe port is still held. Try:")
+    print("    lsof -ti tcp:%d | xargs kill -9" % port)
+    pause()
+    return None
+
+
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
 
@@ -547,16 +683,11 @@ def main():
         signal.signal(sig, lambda *_: sys.exit(0))
 
     try:
-        server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+        server = listen(port)
     except OSError as exc:
-        print("cannot listen on port %d: %s" % (port, exc))
-        print("something else is using it, or a previous copy is still running.")
-        print("\nPress Return to close.")
-        try:
-            input()
-        except EOFError:
-            pass
-        return 1
+        server = take_over(port, exc)
+        if server is None:
+            return 1
 
     banner(port)
     try:

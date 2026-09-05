@@ -397,6 +397,15 @@ the thing in front of you. Double-click **`desk-panel.command`** in Finder and
 open the address it prints on the phone; close that Terminal window and it is
 gone. No launch agent, nothing left listening.
 
+Except when there is. A window closed on a "Terminate running process?" that
+got cancelled, or a copy started from somewhere that is not a window, leaves
+the port held and the next double-click dying on `Address already in use` while
+a browser somewhere goes on being served by something nobody can find. So the
+launcher looks: if what holds the port is another copy of itself it says so and
+offers to stop it, and if it is anything else it names the process and leaves
+it alone. It asks first either way — a running server has a page open on the
+other end of it, and a pomodoro half way through a block.
+
 Run `tools/panel_web/install.sh` once first, from a shell that can read this
 repo. It is the wall the launch agent for `usage_server.py` hit, in a new
 place: `~/Desktop` is TCC-protected, Terminal is not granted it, and a
