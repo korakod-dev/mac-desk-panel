@@ -24,7 +24,7 @@ through here rather than letting the page fetch those ports itself:
 The weather goes through here too, for a third reason: a phone on the Mac's own
 hotspot has no route to the internet of its own, and the Mac does.
 
-Started by double-clicking usage-panel.command, and meant to die with the
+Started by double-clicking desk-panel.command, and meant to die with the
 window that opened it: no launch agent, no daemon, nothing still listening
 after the Terminal window is closed. That is the whole difference between this
 and the two servers it sits in front of -- they are always up because the panel

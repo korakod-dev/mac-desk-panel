@@ -21,9 +21,14 @@ DEST="$HOME/Library/Application Support/t-display-panel-web"
 mkdir -p "$DEST"
 cp "$SRC/serve.py"             "$DEST/"
 cp "$SRC/index.html"           "$DEST/"
-cp "$SRC/usage-panel.command"  "$DEST/"
+cp "$SRC/desk-panel.command"   "$DEST/"
 cp "$SRC/../fonts/IBMPlexSansThai-Regular.ttf" "$DEST/"
-chmod +x "$DEST/usage-panel.command"
+chmod +x "$DEST/desk-panel.command"
+
+# The launcher this one was renamed from. Left behind it would be a second
+# thing to double-click that still works, off whatever it was installed with --
+# which is the worst way for a rename to go wrong.
+rm -f "$DEST/usage-panel.command"
 
 # Where the weather is. The panel gets it out of include/secrets.h at compile
 # time; the installed server is not next to that file and could not read it
@@ -45,6 +50,6 @@ PY
 echo "installed to:"
 echo "    $DEST"
 echo
-echo "Double-click usage-panel.command in there. To keep it somewhere handier,"
+echo "Double-click desk-panel.command in there. To keep it somewhere handier,"
 echo "make an alias of it (right-click, Make Alias) rather than a copy -- a"
 echo "copy on the Desktop lands back behind the same wall."

@@ -393,7 +393,7 @@ Copy them to `~/.claude/` and point `settings.json` at them.
 ### The panel on a phone
 
 `tools/panel_web/` is the panel again, as one web page, for the times it is not
-the thing in front of you. Double-click **`usage-panel.command`** in Finder and
+the thing in front of you. Double-click **`desk-panel.command`** in Finder and
 open the address it prints on the phone; close that Terminal window and it is
 gone. No launch agent, nothing left listening.
 
