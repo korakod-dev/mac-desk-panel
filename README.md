@@ -109,6 +109,30 @@ without the NCM/ECM classes and its lwIP without PPP, so the panel has no way to
 put packets on the cable. Moving *requests* instead needs nothing the stock core
 does not already have.
 
+**What a reply cut in half costs.** The framing is length-prefixed, so the reader
+learns where a body ends from a header it has already passed. That is what lets a
+JSON body carry newlines, and it is also the one thing on this link with no way
+to notice that it is wrong: if the bytes stop halfway through — the Mac suspends
+the bus mid-reply, the bridge loses the port between the header and the body —
+the count never reaches zero. Every reply after it is eaten as filler, the panel
+reads OFFLINE with the cable still in, and nothing recovers it, because the loop
+task is still turning and the watchdog is watching the loop task.
+
+It cost worse than that, too. `HWCDC` leaves `readBytes()` to `Stream`, which
+spins for a full second waiting on a byte that a truncated body is never going to
+send, without yielding — two of those a pass through `loop()`, and the panel is
+polling its buttons at 0.5 Hz, which is slower than a debounce can see a finger.
+A stale panel and a dead one look identical from a chair.
+
+So the body is read with `read()`, which returns what is in the queue and nothing
+more, and any frame still unfinished two seconds after it started is abandoned
+with a `[net] resync` line to the console. A header that does not parse is
+swallowed the same way rather than falling through to the console, where its
+body would have been read as keystrokes — and `S` there dumps the framebuffer.
+The panel also pings now without first asking `HWCDC` whether the host is there:
+that flag is inferred from SOF interrupts, it can latch false across a suspend,
+and the bridge only ever speaks when spoken to.
+
 ## Hardware
 
 LilyGO T-Display-S3 — ESP32-S3 with 16 MB flash and 8 MB PSRAM, driving a

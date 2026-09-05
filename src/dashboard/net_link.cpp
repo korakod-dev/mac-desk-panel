@@ -29,11 +29,26 @@ const uint32_t TIME_TIMEOUT  = 1000;
 // queue can outrun the reader and lose its tail, so the bridge is told to
 // refuse those outright rather than deliver half of one.
 const int      MAX_BODY      = 4096;
+// How long a half-read frame is given before it is abandoned. A body follows
+// its header immediately and arrives in one burst, so a gap this size does not
+// mean a slow host — it means the rest is not coming: the Mac suspended the bus
+// mid-reply, or the bridge lost the port between the header and the body.
+//
+// Without it that frame is permanent. rxNeed never reaches zero, every reply
+// after it is eaten as filler until the count runs out, the panel drops to
+// OFFLINE with the cable still plugged in, and the only way back is a reset by
+// hand. This is the whole of the difference between one dropped reply and a
+// panel that has to be unplugged.
+const uint32_t RX_STALL      = 2000;
 
 // Must match TOKEN_HEADER in tools/mac_stats_server.py and usage_server.py.
 const char    *TOKEN_HEADER  = "X-Panel-Token";
 
-enum class Rx : uint8_t { Idle, Header, Body };
+// Skip is Body without a length to trust: a header that did not parse, or one
+// claiming more than the bridge is allowed to send. The bytes behind it still
+// have to go somewhere, and the one place they must not go is the command queue
+// — 'S' there dumps the framebuffer and 'P' starts the timer.
+enum class Rx : uint8_t { Idle, Header, Body, Skip };
 
 Rx       rxState = Rx::Idle;
 String   rxHeader;
@@ -43,6 +58,7 @@ int      rxNeed   = 0;
 int      rxStatus = 0;
 uint16_t rxId     = 0;        // id `rxSink` is waiting for
 bool     rxDone   = false;
+uint32_t rxSince  = 0;        // when the frame being read was started
 
 uint16_t nextId = 1;
 uint16_t pingId = 0;
@@ -80,8 +96,16 @@ void beginBody() {
 
   unsigned id = 0;
   int status = 0, len = 0;
-  if (sscanf(rxHeader.c_str(), "@RES %u %d %d", &id, &status, &len) != 3) return;
-  if (len < 0 || len > MAX_BODY) return;
+  // Both of these mean the header is not one the bridge wrote, so the length in
+  // it cannot be used to find the end of the body either. Skip discards what
+  // follows until the wire goes quiet, which is the closest thing to a frame
+  // boundary there is when the framing itself is what went wrong.
+  if (sscanf(rxHeader.c_str(), "@RES %u %d %d", &id, &status, &len) != 3 ||
+      len < 0 || len > MAX_BODY) {
+    rxState = Rx::Skip;
+    rxSince = millis();
+    return;
+  }
 
   if (id == pingId) {
     lastUsbOk = millis();
@@ -100,6 +124,7 @@ void beginBody() {
 
   rxNeed  = len;
   rxState = Rx::Body;
+  rxSince = millis();
   if (rxNeed == 0) {
     rxState = Rx::Idle;
     if (rxKeep) rxDone = true;
@@ -107,12 +132,34 @@ void beginBody() {
 }
 
 void pump() {
+  // Nothing below can finish a frame whose remaining bytes are never going to
+  // arrive, so the way out is here rather than inside any one of them. Idle is
+  // the state it is safe to be wrong in: at worst a late tail is read as
+  // console input and dropped, and the next '@' picks the framing back up.
+  if (rxState != Rx::Idle && millis() - rxSince > RX_STALL) {
+    const char *what = rxState == Rx::Body   ? "body"
+                     : rxState == Rx::Header ? "header"
+                                             : "unparsed frame";
+    Serial.printf("[net] resync: %s abandoned after %lums\n", what,
+                  (unsigned long)RX_STALL);
+    rxState = Rx::Idle;
+    rxKeep  = false;
+    rxNeed  = 0;
+  }
+
   for (;;) {
     if (rxState == Rx::Body) {
       while (rxNeed > 0) {
         uint8_t buf[128];
         int want = rxNeed < (int)sizeof(buf) ? rxNeed : (int)sizeof(buf);
-        int n = Serial.readBytes(buf, want);
+        // read(), not readBytes(): HWCDC leaves readBytes to Stream, which
+        // spins for its full one-second timeout waiting for a byte that a
+        // truncated body is never going to send — and it spins without
+        // yielding. Two pumps a pass through loop() is two seconds a pass, and
+        // a panel polled at 0.5 Hz cannot debounce a button press, which is
+        // what made a lost reply look like a dead panel rather than a stale
+        // one. This one returns what is in the queue and nothing more.
+        int n = (int)Serial.read(buf, (size_t)want);
         if (n <= 0) return;  // partial body; pick it up on the next pump
         if (rxKeep && rxSink) rxSink->concat(buf, (unsigned int)n);
         rxNeed -= n;
@@ -122,6 +169,13 @@ void pump() {
         rxDone = true;
         rxKeep = false;
       }
+    }
+
+    if (rxState == Rx::Skip) {
+      uint8_t buf[128];
+      // Everything available, thrown away. The deadline above is what ends it.
+      while ((int)Serial.read(buf, sizeof(buf)) > 0) {}
+      return;
     }
 
     if (!Serial.available()) return;
@@ -143,6 +197,7 @@ void pump() {
     if (c == '@') {
       rxHeader = "@";
       rxState  = Rx::Header;
+      rxSince  = millis();
     } else if (c != '\r' && c != '\n') {
       pushCommand((uint8_t)c);
     }
@@ -286,9 +341,14 @@ void loop() {
     Serial.println("[net] usb bridge stopped answering");
   }
 
-  // No point pinging a cable that is not plugged into anything: HWCDC drops
-  // writes when the host is absent, so the request would never leave.
-  if (Serial && millis() - lastPing >= PING_EVERY) {
+  // Sent without asking HWCDC whether anyone is listening. It drops the write
+  // when the host is absent, which is all the check was ever buying — and the
+  // check itself can latch: `connected` is a guess made from SOF interrupts and
+  // an IN_EMPTY that is only re-armed once, so a suspend and resume can leave it
+  // false with the cable in and the bridge running. The host speaks only when
+  // spoken to, so a panel that stops asking is a panel that never hears anything
+  // again. Better to spend a few bytes on a cable with nothing at the end of it.
+  if (millis() - lastPing >= PING_EVERY) {
     lastPing = millis();
     sendPing();
   }
