@@ -40,7 +40,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE = os.path.join(HERE, "index.html")
-FONT = os.path.join(HERE, os.pardir, "fonts", "IBMPlexSansThai-Regular.ttf")
+
+# The face the panel's .vlw fonts were baked from. Beside this script once it is
+# installed, and up in tools/fonts/ when it is being run out of the repo.
+FONT_CANDIDATES = [
+    os.path.join(HERE, "IBMPlexSansThai-Regular.ttf"),
+    os.path.join(HERE, os.pardir, "fonts", "IBMPlexSansThai-Regular.ttf"),
+]
+
+
+def font_path():
+    for path in FONT_CANDIDATES:
+        if os.access(path, os.R_OK):
+            return path
+    return None
 
 USAGE_URL = "http://127.0.0.1:8787/usage"
 
@@ -104,11 +117,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_file(PAGE, "text/html; charset=utf-8", "no-store")
 
         elif route == "/font.ttf":
-            # The face the panel's own .vlw fonts were baked from, so the web
-            # page is the same type rather than something that looks like it.
-            # Served from here so a phone with no route to the internet -- one
-            # on the Mac's hotspot, say -- still gets it.
-            self.send_file(FONT, "font/ttf", "public, max-age=86400")
+            # Served from here rather than from a font CDN so a phone with no
+            # route to the internet -- one on the Mac's own hotspot, say --
+            # still gets it. A 404 is a real answer: the page has a fallback
+            # stack and will lay itself out in whatever it got.
+            path = font_path()
+            if path:
+                self.send_file(path, "font/ttf", "public, max-age=86400")
+            else:
+                self.send_error(404, "font not installed beside the server")
 
         elif route == "/api/usage":
             live = "live=1" in self.path.partition("?")[2].split("&")

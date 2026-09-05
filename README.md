@@ -395,8 +395,19 @@ Copy them to `~/.claude/` and point `settings.json` at them.
 `tools/panel_web/` is the usage page again, as a web page, for the times the
 panel is not the thing in front of you. Double-click **`usage-panel.command`**
 in Finder and open the address it prints on the phone; close that Terminal
-window and it is gone. Nothing is installed, no launch agent, nothing left
-listening.
+window and it is gone. No launch agent, nothing left listening.
+
+Run `tools/panel_web/install.sh` once first, from a shell that can read this
+repo. It is the wall the launch agent for `usage_server.py` hit, in a new
+place: `~/Desktop` is TCC-protected, Terminal is not granted it, and a
+`.command` opened from Finder is granted the file that was clicked and nothing
+else beside it. So out of the repo the launcher starts and then cannot read
+`serve.py` sitting next to it — an `EPERM` on `open`, which no mode bit
+explains and no `chmod` moves. The installer puts the copy that actually runs
+under `~/Library/Application Support/`, which nothing guards, and the launcher
+falls through to it. Double-click the one in there; an *alias* of it will
+follow, a copy on the Desktop lands back behind the same wall. Re-run the
+installer after editing either file — the installed copy is a copy.
 
 It is a second view, not a second source. `usage_server.py` already holds the
 reading and is already up, so `serve.py` serves one HTML file and proxies
