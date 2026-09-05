@@ -390,6 +390,40 @@ are kept here:
 
 Copy them to `~/.claude/` and point `settings.json` at them.
 
+### The usage page on a phone
+
+`tools/panel_web/` is the usage page again, as a web page, for the times the
+panel is not the thing in front of you. Double-click **`usage-panel.command`**
+in Finder and open the address it prints on the phone; close that Terminal
+window and it is gone. Nothing is installed, no launch agent, nothing left
+listening.
+
+It is a second view, not a second source. `usage_server.py` already holds the
+reading and is already up, so `serve.py` serves one HTML file and proxies
+`/usage` through to `127.0.0.1:8787` — which is also the whole reason the proxy
+exists rather than the page fetching that port itself. Two things would stop
+it: `usage_server` refuses requests from off the machine without
+`X-Panel-Token`, and a browser opening a URL cannot send a header; and a page
+on one port fetching another is cross-origin, which `usage_server` sends no
+headers to permit. Fetched from the server the page came from, both questions
+stop being asked, and the token never leaves the Mac.
+
+The page is the panel: a 320×170 canvas drawn with the arithmetic in
+`main.cpp`, scaled up to whatever the phone gives it, colours kept in RGB565
+until they are written out so `shade()` there rounds where `shade()` here does,
+and the type served off the same server as the face the `.vlw` fonts were baked
+from. Three things are honestly different, because on a phone they have to be.
+The status bar says `HTTP` or `OFFLINE` where the panel says `USB` or `WiFi`.
+The four page dots are drawn and lit as the panel lights them, but there is
+nowhere to go — this is the one page. And the hint bar names a tap, because the
+buttons it would otherwise name are not on the thing you are holding.
+
+What the phone gets it gets over plain HTTP with no token, so anyone on the
+network can read it. That is percentages and reset times and nothing else, and
+posting is not on this server at all — but it is worth knowing before running
+it on a network you do not own. It needs the Mac awake: a dark screen is fine,
+a sleeping machine is not.
+
 ## The pomodoro page
 
 The only page here holding a state of its own. Every other one is a window onto

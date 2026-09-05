@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#080c08">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Claude Code usage</title>
+
+<!--
+  The panel's usage page, on a phone.
+
+  Drawn on a 320x170 canvas with the same arithmetic main.cpp uses, scaled up to
+  whatever the phone gives it -- not rebuilt out of divs at a phone's
+  proportions. The point of looking at this is that it is the panel: the same
+  two cards in the same two hues, the same gradient across the same bar, the
+  same "resets 18:30 . in 3h 05m" under it. A responsive rebuild would be a
+  different picture of the same numbers, and then there would be two designs to
+  keep in step instead of one.
+
+  Colours are kept as RGB565 and converted on the way out, so `shade()` here
+  rounds where `shade()` on the panel rounds. Type is the face the panel's .vlw
+  fonts were baked from, served off the same server, so a phone with no route
+  to the internet still gets it.
+
+  What is honestly not the same, and is not pretending to be:
+
+    - the status bar says HTTP or OFFLINE where the panel says USB or WiFi,
+      because that is what the link is here.
+    - the four page dots are drawn and lit as the panel lights them, but there
+      is nowhere to go: this is the one page.
+    - the hint bar names what a phone can actually do. The panel's own hints
+      name buttons that are not on this thing.
+-->
+
+<style>
+  @font-face {
+    font-family: PanelUI;
+    src: url(/font.ttf) format('truetype');
+    font-display: block;
+  }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #080c08;   /* C_BG, the panel's own near-black */
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overscroll-behavior: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  canvas { display: block; }
+</style>
+</head>
+
+<body>
+<canvas id="panel" width="320" height="170"></canvas>
+
+<script>
+"use strict";
+
+// --- the panel's geometry, from src/dashboard/main.cpp -----------------------
+
+const W = 320, H = 170;
+const BAR_TOP = 20, BAR_BOTTOM = 18;
+const BODY_TOP = BAR_TOP, BODY_BOT = H - BAR_BOTTOM;
+const CARD_X = 4, CARD_W = W - 8, CARD_R = 6, CARD_PAD = 6;
+const BAR_H = 14;
+const PAGE_COUNT = 4, PAGE_USAGE = 1;
+
+// --- and its theme, still in RGB565 ------------------------------------------
+
+const C = {
+  BG: 0x0861, BAR: 0x18E3, TEXT: 0xFFFF, DIM: 0x8C71,
+  ACCENT: 0x05FF, WARM: 0xFD20, OK: 0x2FEB, ERR: 0xF9C7,
+  TEAL: 0x0656, BLUE: 0x2BDF, VIOLET: 0x8A7F, MAGENTA: 0xF9F4,
+};
+const FLIP = [C.TEAL, C.BLUE, C.VIOLET, C.MAGENTA];
+
+// A darker cast of a colour, scaled in RGB565's own channel widths -- the same
+// truncation the panel does, so a card is the same colour on both.
+function shade(c, pct) {
+  const r = (c >> 11) & 0x1F, g = (c >> 5) & 0x3F, b = c & 0x1F;
+  return ((((r * pct / 100) | 0) << 11) |
+          (((g * pct / 100) | 0) << 5) |
+          ((b * pct / 100) | 0));
+}
+
+// 565 out to 888 by bit replication, which is what the driver does on the way
+// to the glass.
+function css(c) {
+  const r = (c >> 11) & 0x1F, g = (c >> 5) & 0x3F, b = c & 0x1F;
+  return `rgb(${(r << 3) | (r >> 2)},${(g << 2) | (g >> 4)},${(b << 3) | (b >> 2)})`;
+}
+
+// --- the drawing primitives TFT_eSPI gives the firmware -----------------------
+
+const cv = document.getElementById("panel");
+const ctx = cv.getContext("2d");
+
+// One device pixel, in the panel's own units. Set by fit(), and needed by the
+// one thing here drawn a pixel at a time.
+let PXW = 1;
+
+function rect(x, y, w, h, c) {
+  ctx.fillStyle = css(c);
+  ctx.fillRect(x, y, w, h);
+}
+
+function roundPath(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function fillRound(x, y, w, h, r, c) {
+  ctx.fillStyle = css(c);
+  roundPath(x, y, w, h, r);
+  ctx.fill();
+}
+
+function drawRound(x, y, w, h, r, c) {
+  ctx.strokeStyle = css(c);
+  ctx.lineWidth = 1;
+  roundPath(x + 0.5, y + 0.5, w - 1, h - 1, r);
+  ctx.stroke();
+}
+
+// fillCircle(x, y, r) on the panel covers 2r+1 pixels across, centred on the
+// pixel at x,y -- hence the half-pixel offsets.
+function circle(x, y, r, c) {
+  ctx.fillStyle = css(c);
+  ctx.beginPath();
+  ctx.arc(x + 0.5, y + 0.5, r + 0.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function font(px) { ctx.font = px + 'px PanelUI, system-ui, sans-serif'; }
+function tw(s)    { return Math.round(ctx.measureText(s).width); }
+
+// The datum strings are TFT_eSPI's: first letter the vertical anchor, second
+// the horizontal one.
+function text(s, x, y, c, datum) {
+  ctx.fillStyle = css(c);
+  ctx.textAlign = datum[1] === 'L' ? 'left' : datum[1] === 'R' ? 'right' : 'center';
+  ctx.textBaseline = datum[0] === 'M' ? 'middle' : 'top';
+  ctx.fillText(s, x, y);
+}
+
+// --- the page's own helpers ---------------------------------------------------
+
+// Cool-to-hot across a filled bar, matching the terminal's status line.
+function rampColor(t) {
+  let r, g;
+  if (t < 0.5) { r = (t * 2 * 255) | 0; g = 255; }
+  else         { r = 255; g = ((1 - t) * 2 * 255) | 0; }
+  return ((r & 0xF8) << 8) | ((g & 0xFC) << 3);
+}
+
+function severityColor(pct) {
+  if (pct >= 85) return C.ERR;
+  if (pct >= 60) return C.WARM;
+  return C.OK;
+}
+
+const WDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MON  = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+              'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+const pad2 = n => String(n).padStart(2, '0');
+
+// "2d 5h" / "3h 05m" / "12m", empty for anything non-positive.
+function spanText(seconds) {
+  if (seconds <= 0) return '';
+  const dd = Math.floor(seconds / 86400);
+  const hh = Math.floor((seconds % 86400) / 3600);
+  const mm = Math.floor((seconds % 3600) / 60);
+  if (dd > 0) return `${dd}d ${hh}h`;
+  if (hh > 0) return `${hh}h ${pad2(mm)}m`;
+  return `${mm}m`;
+}
+
+// Wall-clock reset, with the weekday once it is more than a day out.
+function resetClock(reset, now) {
+  if (reset <= 0) return '';
+  const d = new Date(reset * 1000);
+  const clock = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return reset < now + 86400 ? clock : `${WDAY[d.getDay()]} ${clock}`;
+}
+
+// --- the shapes the pages are built from -------------------------------------
+
+function panelCard(x, y, w, h, hue) {
+  const half = h >> 1;
+  fillRound(x, y, w, h, CARD_R, shade(hue, 26));
+  fillRound(x, y + half, w, h - half, CARD_R, shade(hue, 18));
+  rect(x, y + half, w, CARD_R, shade(hue, 18));
+  drawRound(x, y, w, h, CARD_R, shade(hue, 62));
+}
+
+function chip(x, cy, label, hue) {
+  font(16);
+  const w = tw(label) + 12, h = 18;
+  fillRound(x, cy - h / 2, w, h, 5, hue);
+  text(label, x + w / 2, cy, C.BG, 'MC');
+  return x + w;
+}
+
+function barRow(cx, cw, cy, label, hue, value, valueColor) {
+  const left = chip(cx + CARD_PAD, cy, label, hue) + 10;
+
+  font(24);
+  let right = cx + cw - CARD_PAD;
+  if (value) {
+    text(value, right, cy, valueColor, 'MR');
+    right -= tw(value) + 10;
+  }
+
+  const t = { x: left, w: right - left };
+  if (t.w > 0) rect(t.x, cy - BAR_H / 2, t.w, BAR_H, shade(hue, 10));
+  return t;
+}
+
+// One window on one card: the card says which window, the gradient and the
+// figure say how full it is.
+function gauge(label, y, hue, pct, reset, now) {
+  const CH = 52, cy = y + 16;
+  panelCard(CARD_X, y, CARD_W, CH, hue);
+
+  if (!(pct >= 0)) {
+    const t = barRow(CARD_X, CARD_W, cy, label, hue, '', C.DIM);
+    font(16);
+    text('waiting for a reading', t.x + 8, cy, C.DIM, 'ML');
+    return;
+  }
+
+  const t = barRow(CARD_X, CARD_W, cy, label, hue, pct + '%', severityColor(pct));
+
+  // Column by column, so the ramp is a gradient rather than a few blocks.
+  //
+  // Each column is a pixel of the panel and rather more than a pixel here, so
+  // it is drawn a device pixel wider than it is and laid over the one after it.
+  // Butted exactly edge to edge, every seam lands mid-pixel and gets
+  // antialiased against the background, and a smooth ramp comes out combed.
+  // The last column is left square: there is nothing beyond it to hide under.
+  let filled = Math.floor(t.w * pct / 100);
+  if (filled > t.w) filled = t.w;
+  if (filled < 2 && pct > 0) filled = 2;
+  for (let x = 0; x < filled; x++) {
+    rect(t.x + x, cy - BAR_H / 2, x === filled - 1 ? 1 : 1 + PXW, BAR_H,
+         rampColor(x / t.w));
+  }
+
+  if (!reset || reset <= 0) return;
+
+  font(16);
+  const when = 'resets ' + resetClock(reset, now);
+  const tx = CARD_X + CARD_PAD, ty = y + 38;
+  text(when, tx, ty, C.DIM, 'ML');
+
+  const left = spanText(reset - now);
+  if (left) {
+    const x = tx + tw(when) + 9;
+    circle(x, ty, 1, C.DIM);
+    text('in ' + left, x + 9, ty, C.DIM, 'ML');
+  }
+}
+
+function drawStatusBar(now, online) {
+  rect(0, 0, W, BAR_TOP, C.BAR);
+  font(16);
+
+  text(online ? 'HTTP' : 'OFFLINE', 6, BAR_TOP / 2, online ? C.OK : C.ERR, 'ML');
+
+  const d = new Date(now * 1000);
+  text(`${WDAY[d.getDay()]} ${pad2(d.getDate())} ${MON[d.getMonth()]}`,
+       W - 6, BAR_TOP / 2, C.TEXT, 'MR');
+
+  for (let i = 0; i < PAGE_COUNT; i++) {
+    const x = W / 2 - (PAGE_COUNT - 1) * 6 + i * 12;
+    circle(x, BAR_TOP / 2, 3, i === PAGE_USAGE ? C.ACCENT : shade(FLIP[i], 55));
+  }
+}
+
+function drawHintBar(left, right) {
+  rect(0, BODY_BOT, W, BAR_BOTTOM, C.BAR);
+  font(16);
+  text(left, 6, BODY_BOT + BAR_BOTTOM / 2, C.DIM, 'ML');
+  text(right, W - 6, BODY_BOT + BAR_BOTTOM / 2, C.DIM, 'MR');
+}
+
+// --- what is on screen --------------------------------------------------------
+
+const state = {
+  data: null,        // the last good reading
+  valid: false,
+  error: '',
+  online: true,
+  busy: false,
+  baseNow: 0,        // the server's clock at the last good reading
+  baseAt: 0,         // performance.now() when that arrived
+};
+
+// The host's clock rather than the phone's. Every reset time in the payload is
+// an epoch the Mac worked out, and a phone whose clock has drifted would push
+// every countdown on the page by the drift.
+function serverNow() {
+  if (!state.baseNow) return Math.floor(Date.now() / 1000);
+  return Math.floor(state.baseNow + (performance.now() - state.baseAt) / 1000);
+}
+
+// How stale the reading is now, not how stale it was when it arrived: a failed
+// poll would otherwise leave the age frozen and a dead link read as fresh.
+function ageNow() {
+  if (!state.valid || !state.data || !(state.data.age >= 0)) return -1;
+  return state.data.age + Math.floor((performance.now() - state.baseAt) / 1000);
+}
+
+function render() {
+  const now = serverNow();
+  rect(0, 0, W, H, C.BG);
+  drawStatusBar(now, state.online);
+
+  font(16);
+  text('Claude Code usage', 8, BODY_TOP + 10, C.MAGENTA, 'ML');
+
+  if (!state.valid) {
+    text(state.error || 'loading...', W / 2, 90, C.ERR, 'MC');
+  } else {
+    const d = state.data;
+    const age = ageNow();
+    if (age >= 0) {
+      const label = d.live ? 'live'
+                  : age < 90 ? age + 's ago'
+                             : Math.floor(age / 60) + 'm ago';
+      text(label, W - 8, BODY_TOP + 10, age > 900 ? C.WARM : C.DIM, 'MR');
+    }
+    gauge('5H', 42, C.TEAL,   d.h5, d.h5_reset, now);
+    gauge('7D', 98, C.VIOLET, d.d7, d.d7_reset, now);
+  }
+
+  drawHintBar('tap  refresh', state.busy ? 'refreshing' : 'auto 30s');
+}
+
+// --- the reading ---------------------------------------------------------------
+
+// live=1 is this page saying it is the thing being looked at, which is exactly
+// what it means on the panel. The server holds the API to one call every 25s
+// whatever we ask, so asking on every poll costs nothing extra.
+const POLL_MS = 30000;
+
+async function poll(live) {
+  if (state.busy) return;
+  state.busy = true;
+  render();
+
+  try {
+    const r = await fetch('/api/usage' + (live ? '?live=1' : ''),
+                          { cache: 'no-store' });
+    const d = await r.json();
+    state.online = true;
+
+    if (d.error) {
+      // The Mac answered; the server behind it did not. Keep whatever numbers
+      // are already up -- they go on ageing, which is the honest thing for
+      // them to do -- and only take the page over when there are none.
+      if (!state.valid) state.error = d.error;
+    } else {
+      state.data = d;
+      state.baseNow = d.now;
+      state.baseAt = performance.now();
+      state.valid = d.h5 >= 0 || d.d7 >= 0;
+      state.error = state.valid ? '' : 'no reading yet';
+    }
+  } catch (e) {
+    // Nothing answered at all: the Mac slept, the phone moved off the network,
+    // or the window this server was started in got closed.
+    state.online = false;
+    if (!state.valid) state.error = 'cannot reach the Mac';
+  }
+
+  state.busy = false;
+  render();
+}
+
+// --- fitting it to the phone ----------------------------------------------------
+
+function fit() {
+  const s = Math.min(innerWidth / W, innerHeight / H, 5);
+  const dpr = devicePixelRatio || 1;
+
+  cv.style.width  = (W * s) + 'px';
+  cv.style.height = (H * s) + 'px';
+  cv.width  = Math.round(W * s * dpr);
+  cv.height = Math.round(H * s * dpr);
+
+  // Resizing the backing store resets the context, so the transform goes on
+  // after rather than before.
+  ctx.setTransform(s * dpr, 0, 0, s * dpr, 0, 0);
+  PXW = 1 / (s * dpr);
+  render();
+}
+
+// Keep the screen lit while the page is the thing in front of you. It is a
+// panel; a panel that blanks after thirty seconds is a window you keep waking.
+let wakeLock = null;
+async function holdScreen() {
+  try {
+    if ('wakeLock' in navigator && document.visibilityState === 'visible') {
+      wakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch (e) { /* not offered, or refused: nothing to fall back to */ }
+}
+
+addEventListener('resize', fit);
+addEventListener('orientationchange', fit);
+
+cv.addEventListener('click', () => poll(true));
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  // A phone that has been in a pocket has a page full of numbers from before
+  // it went in there, and timers that were throttled while it was.
+  holdScreen();
+  poll(true);
+});
+
+// Metrics before pixels: every row here is laid out from a measured string, so
+// drawing before the face has loaded lays the page out for the fallback and
+// then leaves it that way until something else redraws it.
+document.fonts.load('16px PanelUI')
+  .then(() => document.fonts.load('24px PanelUI'))
+  .catch(() => {})
+  .then(() => {
+    fit();
+    poll(true);
+    setInterval(() => poll(true), POLL_MS);
+    setInterval(render, 1000);   // the countdown and the age, between polls
+    holdScreen();
+  });
+</script>
+</body>
+</html>
