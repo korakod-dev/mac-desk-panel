@@ -114,7 +114,38 @@ static const int16_t SCR_H = 170;
 // minute rather than fifteen seconds costs nothing worth having.
 static const uint32_t WDT_TIMEOUT_S = 30;
 
+// The watchdog catches a loop that stopped turning. This catches the other kind
+// of wedge, the one it is blind to by construction: the loop still turning, the
+// cable still in, and nothing on the other end of it answering.
+//
+// HWCDC decides whether a host is there from SOF interrupts and an IN_EMPTY it
+// only ever re-arms once, so a suspend and a resume can leave it saying "not
+// connected" with the cable in and the bridge running — and a write in that
+// state is dropped rather than sent, so the panel stops asking and the bridge,
+// which only speaks when spoken to, never says anything again. Nothing in the
+// firmware can re-enumerate a USB device. A restart can.
+//
+// Five minutes, and only against the signature of that particular failure:
+// silence from a bridge that *was* answering, the bus still ticking (so the Mac
+// is awake — asleep, the SOF stops and the silence is expected), and the CDC
+// insisting it is not connected (which a merely stopped bridge does not cause).
+// It fires at most once per episode, because after the restart nothing has
+// answered yet and usbSilentFor() says 0 until something does.
+static const uint32_t USB_DEAD_MS = 300000;
+
 static esp_reset_reason_t bootReason = ESP_RST_UNKNOWN;
+
+// A restart the panel asked for, told apart from a reflash: both arrive as
+// ESP_RST_SW and only one of them is worth putting on the screen. RTC memory
+// survives a software reset and not a power cycle, which is exactly the life of
+// the question — a panel someone has just plugged in has nothing to explain.
+RTC_NOINIT_ATTR uint32_t restartTag;
+static const uint32_t TAG_LINK_DEAD = 0x4C4B4444;  // 'LKDD'
+
+// What the banner and the vitals row both read, decided once at boot so the two
+// cannot disagree about why the panel is up.
+static const char *bootLabel   = "unknown";
+static bool        bootUnasked = false;
 
 static const char *resetName(esp_reset_reason_t r) {
   switch (r) {
@@ -2034,8 +2065,7 @@ static void drawVitals() {
 
   // Warm only when the restart was not asked for. "power" after you plugged it
   // in is the answer working, not a warning.
-  row(LX, CW, ry, "Boot", resetName(bootReason),
-      bootWasAbnormal(bootReason) ? C_WARM : C_TEXT);
+  row(LX, CW, ry, "Boot", bootLabel, bootUnasked ? C_WARM : C_TEXT);
   row(RX, CW, ry, "CPU", String(getCpuFrequencyMhz()) + " MHz", C_TEXT);
 
   fb.drawFastVLine(x + w / 2, y + 24, h - 34, shade(C_BLUE, 50));
@@ -2665,7 +2695,11 @@ void setup() {
   // under it. panic = true so a trip leaves a backtrace on the way out —
   // monitor_filters has the decoder — rather than just a silent reboot.
   bootReason = esp_reset_reason();
-  Serial.printf("[boot] last reset: %s\n", resetName(bootReason));
+  bool linkDead = bootReason == ESP_RST_SW && restartTag == TAG_LINK_DEAD;
+  restartTag  = 0;
+  bootLabel   = linkDead ? "link dead" : resetName(bootReason);
+  bootUnasked = linkDead || bootWasAbnormal(bootReason);
+  Serial.printf("[boot] last reset: %s\n", bootLabel);
 
   esp_task_wdt_init(WDT_TIMEOUT_S, true);
   enableLoopWDT();
@@ -2709,8 +2743,8 @@ void setup() {
   // never being read at all, so it comes and finds you instead — which is what
   // the banner is for, and the overlay keeps the reason afterwards for as long
   // as the panel stays up.
-  if (bootWasAbnormal(bootReason)) {
-    raiseLocal("warn", String("Panel restarted: ") + resetName(bootReason), 0);
+  if (bootUnasked) {
+    raiseLocal("warn", String("Panel restarted: ") + bootLabel, 0);
   }
 
   net::setIdleHook(serviceWhileBlocked);
@@ -2830,6 +2864,20 @@ void loop() {
     lastMac = 0;
   }
   wasOnline = online;
+
+  // See USB_DEAD_MS. The two guards past the signature itself are about what a
+  // restart would cost rather than whether it would work: the radio is already
+  // carrying the panel, so there is nothing to recover, and a running timer is
+  // state that only exists here — losing twenty-five minutes of it to fix a
+  // link nobody is asking anything of is the wrong trade. The timer runs out;
+  // the link will still be dead when it does.
+  if (net::usbSilentFor() > USB_DEAD_MS && Serial.isPlugged() &&
+      !Serial.isConnected() && WiFi.status() != WL_CONNECTED && !pomoEngaged()) {
+    Serial.println("[net] bridge silent five minutes with the bus alive - restarting");
+    Serial.flush();
+    restartTag = TAG_LINK_DEAD;
+    esp_restart();
+  }
 
   // NTP only reaches a server when WiFi is up. Over USB the host supplies the
   // epoch instead: once on arrival, then hourly, which is far more often than

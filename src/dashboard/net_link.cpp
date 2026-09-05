@@ -68,6 +68,10 @@ bool          inRequest = false;   // guards the single reader against nesting
 
 uint32_t lastPing = 0, lastUsbOk = 0;
 bool     usbUp = false;
+// Whether there has ever been a bridge on this boot. What separates "the link
+// died" from "there was never a link", which look identical from the silence
+// alone and want opposite things done about them.
+bool     everUp = false;
 
 // Room for a few keystrokes; the UI only ever reads single-byte commands.
 uint8_t cmdBuf[16];
@@ -110,6 +114,7 @@ void beginBody() {
   if (id == pingId) {
     lastUsbOk = millis();
     usbUp     = true;
+    everUp    = true;
     pingId    = 0;
   } else if (rxSink && id == rxId) {
     rxKeep   = true;
@@ -251,6 +256,7 @@ bool request(const char *verb, const String &arg, uint32_t timeout, String &out,
   }
   lastUsbOk = millis();
   usbUp     = true;
+  everUp    = true;
   return true;
 }
 
@@ -402,6 +408,12 @@ bool get(const String &url, String &out, String &err, uint32_t timeoutMs,
 
   if (err.isEmpty()) err = "no link";
   return false;
+}
+
+uint32_t usbSilentFor() {
+  if (!everUp || usbUp) return 0;
+  uint32_t silent = millis() - lastUsbOk;
+  return silent ? silent : 1;  // 0 is reserved for "not silent"
 }
 
 bool syncTimeFromHost() {

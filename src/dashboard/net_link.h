@@ -52,6 +52,16 @@ bool get(const String &url, String &out, String &err, uint32_t timeoutMs = 0,
 // Wall clock from the bridge, for when there is no WiFi to reach NTP over.
 bool syncTimeFromHost();
 
+// How long the USB bridge has gone without answering, in ms — 0 while it is
+// answering, and 0 until it has answered once since boot, so a panel that came
+// up with no bridge at all is never described as having lost one.
+//
+// Whether a silence is worth restarting over is a policy question and is not
+// answered here: it depends on the pomodoro, the radio and the state of the bus,
+// none of which are this module's to read. main.cpp decides, next to the
+// watchdog it already owns.
+uint32_t usbSilentFor();
+
 // Console bytes the host typed, one at a time. -1 when the queue is empty.
 int readCommand();
 

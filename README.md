@@ -755,8 +755,23 @@ request and on the way out. The clock still stops for the length of a request;
 what it no longer does is add five of them together against a budget sized for
 one.
 
-A restart it did not choose raises a banner, the same one the Mac uses to
-interrupt you, because the alternative is learning nothing: a watchdog that
+There is a second kind of wedge that watchdog is blind to by construction: the
+loop still turning, the cable still in, and nothing at the other end answering.
+`HWCDC` works out whether a host is there from SOF interrupts and an `IN_EMPTY`
+it re-arms only once, so a suspend and a resume can leave it saying *not
+connected* with the cable in and the bridge running — and a write in that state
+is dropped rather than sent, so the panel stops asking, and the bridge only ever
+speaks when spoken to. Nothing in the firmware can re-enumerate a USB device; a
+restart can. Five minutes of silence from a bridge that *was* answering, with the
+bus still ticking and the CDC insisting it is not connected, and the panel
+restarts itself. It fires at most once per episode — after the restart nothing
+has answered yet, and a panel that never had a bridge is not one that lost one —
+and it stands down for a running pomodoro, which is state that exists nowhere
+else.
+
+A restart nobody at the desk asked for — either kind, the one it was forced into
+and the one it chose — raises a banner, the same one the Mac uses to interrupt
+you, because the alternative is learning nothing: a watchdog that
 quietly recovers the panel at four in the morning leaves no other trace but an
 uptime that went back to zero while nobody was looking. The reason stays in the
 vitals overlay afterwards for as long as the panel is up. `panic = true`, so a
