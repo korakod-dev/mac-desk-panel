@@ -208,6 +208,130 @@ def fetch_weather():
     }
 
 
+# --- the pomodoro -----------------------------------------------------------------
+#
+# The one thing here that is not a view of something else. Every other reading
+# on the page is the Mac's, fetched; this is a state, and it has to live
+# somewhere.
+#
+# It lives here rather than in the browser, and it is worth being clear that
+# this makes it a *second* timer -- the panel's own is on the panel, holds its
+# millis() and cannot be read over any wire. Two timers on one desk is a real
+# cost and the alternative was worse in three ways: a phone that locks its
+# screen throttles its timers and would come back minutes wrong, a tab closed
+# is a timer lost, and a phone and a laptop looking at the same page would each
+# be counting their own afternoon. Held here, the countdown is the same one
+# wherever it is opened and goes on running while nothing is looking at it.
+#
+# It dies with the window this server was started in, like everything else here.
+# That is the honest edge of a timer whose whole existence is a Terminal window.
+
+POMO = {"focus": 25 * 60, "short": 5 * 60, "long": 15 * 60}
+POMO_SET = 4          # focus blocks before the long break
+
+_pomo = {"phase": "focus", "running": False, "end_at": 0.0,
+         "left": POMO["focus"], "done": 0}
+
+
+def pomo_left(now):
+    """What is left of the phase, out of whichever clock is the live one: a
+    deadline while it runs, a remainder while it does not."""
+    if not _pomo["running"]:
+        return _pomo["left"]
+    return max(0.0, _pomo["end_at"] - now)
+
+
+def pomo_fresh(now):
+    """Not started, as opposed to stopped. A countdown that has been paused
+    looks exactly like one nobody has begun, and the two want different things
+    from the same hold."""
+    return not _pomo["running"] and pomo_left(now) >= POMO[_pomo["phase"]]
+
+
+def pomo_load(phase, run, now):
+    _pomo.update(phase=phase, left=POMO[phase], running=run,
+                 end_at=now + POMO[phase])
+
+
+def pomo_next(earned, now):
+    """What follows what. A block of work earns its place in the set and hands
+    over to a break; the fourth hands over to the long one, and a break hands
+    back.
+
+    `earned` is the difference between a phase that ran out and one skipped by
+    hand -- the count is a count of work done, and a block abandoned four
+    minutes in did not happen. A break that was earned starts itself; the focus
+    block after it does not, because that one is yours to begin.
+    """
+    phase = _pomo["phase"]
+    if phase == "focus":
+        if earned:
+            _pomo["done"] += 1
+        nxt = "long" if _pomo["done"] >= POMO_SET else "short"
+    else:
+        if phase == "long":
+            _pomo["done"] = 0
+        nxt = "focus"
+    pomo_load(nxt, earned and nxt != "focus", now)
+
+
+def pomo_advance(now):
+    """Run out whatever ran out while nobody was looking.
+
+    The panel notices this in its loop; here there is no loop, so it is settled
+    on the way past instead. It cannot go far: a break that ends loads a focus
+    block stopped, so the chain halts at the next thing somebody has to start,
+    however long the page was closed. The guard is for a clock that jumped.
+    """
+    for _ in range(8):
+        if not _pomo["running"] or now < _pomo["end_at"]:
+            return
+        pomo_next(True, now)
+
+
+def pomo_do(action, now):
+    """start -- the short press: start it, or stop it where it stands.
+    hold   -- reset the phase, or skip it when it has not been started.
+    clear  -- throw away the set, which is the only thing here that loses more
+              than a phase, and is why the panel keeps it a stop further down
+              the same hold.
+    """
+    if action == "start":
+        if _pomo["running"]:
+            _pomo["left"] = pomo_left(now)
+            _pomo["running"] = False
+        else:
+            _pomo["end_at"] = now + _pomo["left"]
+            _pomo["running"] = True
+    elif action == "hold":
+        if pomo_fresh(now):
+            pomo_next(False, now)
+        else:
+            pomo_load(_pomo["phase"], False, now)
+    elif action == "clear":
+        _pomo["done"] = 0
+        pomo_load("focus", False, now)
+    else:
+        return False
+    return True
+
+
+def pomo_reading(now):
+    """Seconds rather than the panel's milliseconds, and `len` alongside so the
+    page can draw the running block filling its cell without knowing what a
+    focus block is worth."""
+    pomo_advance(now)
+    return {
+        "phase": _pomo["phase"],
+        "running": _pomo["running"],
+        "left": round(pomo_left(now), 3),
+        "len": POMO[_pomo["phase"]],
+        "fresh": pomo_fresh(now),
+        "done": _pomo["done"],
+        "set": POMO_SET,
+    }
+
+
 # --- holding them ---------------------------------------------------------------
 
 # One lock over the lot rather than one per reading. Every fetch behind it is
@@ -262,6 +386,7 @@ def state():
         mac, _ = reading("mac", fetch_mac)
         cpu, _ = reading("cpu", fetch_cpu)
         weather, wage = reading("weather", fetch_weather)
+        pomo = pomo_reading(time.time())
 
     # The two local servers date their own snapshots and the page adds the time
     # since; the weather has no such field of its own, so its age is how long
@@ -270,7 +395,7 @@ def state():
         weather = dict(weather, age=wage)
 
     return {"now": int(time.time()), "usage": usage, "mac": mac,
-            "cpu": cpu, "weather": weather}
+            "cpu": cpu, "weather": weather, "pomo": pomo}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -322,8 +447,38 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
 
+    def do_POST(self):
+        # The one thing on this server that changes something rather than
+        # reporting it, and it changes only the timer this server is holding.
+        # Same reach as reading the page: whoever can open it can press the
+        # button on it, which is what a button on a page means.
+        if self.path.split("?")[0] != "/api/pomo":
+            self.send_error(404)
+            return
+
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+            fields = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+        except (ValueError, OSError):
+            self.send_error(400, "bad body")
+            return
+
+        with _lock:
+            ok = pomo_do(fields.get("do"), time.time())
+            if ok:
+                reading = pomo_reading(time.time())
+
+        if not ok:
+            self.send_error(400, "unknown action")
+            return
+
+        # The new state comes straight back rather than leaving the page to poll
+        # for it: a button that takes two seconds to look pressed is a button
+        # people press twice.
+        self.reply(200, "application/json", json.dumps(reading).encode())
+
     def log_message(self, fmt, *args):
-        pass   # a phone polling every 30s would bury anything worth reading
+        pass   # a phone polling every couple of seconds would bury anything useful
 
 
 def local_addresses():

@@ -441,14 +441,36 @@ says `HTTP` or `OFFLINE` where the panel says `USB` or `WiFi`; the hint bar
 names a tap, because the buttons it would otherwise name are not on the thing
 you are holding; and the panel's own vitals are not there and cannot be, since
 the heap, the PSRAM, the RSSI and the boot reason are the ESP32's and nothing
-on this side knows them. The pomodoro is not there either, for a better reason
-than room — it is the one page holding a state of its own, and a second copy of
-that state on a phone would be a second timer, not a second view of one.
+on this side knows them.
+
+The pomodoro is there, and it is the one section that is not a view of
+something else. Every other reading on the page is the Mac's; this is a state,
+and it is worth saying plainly that it is a **second timer** — the panel's own
+lives in its `millis()` and cannot be read over any wire, so the two do not and
+cannot agree.
+
+It is held by `serve.py` rather than in the browser. A phone throttles a locked
+tab's timers and would come back minutes wrong, a closed tab is a lost
+countdown, and a phone and a laptop on the same page would each be counting
+their own afternoon. Held on the server it is one countdown wherever it is
+opened, and it goes on running while nothing is looking at it — until the
+Terminal window closes, which takes it with everything else here.
+
+The panel finds its third and fourth actions on a page with two buttons by how
+long one is held, and the page does the same with one thumb: a tap starts or
+stops, a hold past 600 ms resets the phase — or skips it, when it has not been
+started — and holding past three seconds throws away the set. Both stops are
+the firmware's own, and so is the hint bar changing under a thumb that is still
+down, which is the only thing that makes the second stop findable. A press
+anywhere above the section is the refresh.
 
 What the phone gets it gets over plain HTTP with no token, so anyone on the
 network can read it: the usage percentages, the reset times, and this Mac's
-charge, memory, disk and cores. Posting a notification is not on this server at
-all. It needs the Mac awake — a dark screen is fine, a sleeping machine is not.
+charge, memory, disk and cores. They can also press the pomodoro's button,
+which is the one thing here that changes something rather than reporting it and
+is the same reach as reading the page — what a button on a page means. Posting
+a notification to the panel is not on this server at all. It needs the Mac
+awake — a dark screen is fine, a sleeping machine is not.
 
 ## The pomodoro page
 

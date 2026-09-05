@@ -63,7 +63,7 @@
     -webkit-tap-highlight-color: transparent;
   }
 
-  canvas { display: block; }
+  canvas { display: block; touch-action: none; }
 </style>
 </head>
 
@@ -101,7 +101,18 @@ const M_BAR_Y = M_BY + 15, M_DETAIL_Y = M_BY + 35;
 const M_GRID_Y = 374, M_GRID_H = 26;
 const M_CTOP = 410, M_CBOT = 440;
 
-const H = 464;
+// The pomodoro, at the panel's own dimensions again. Last because it is last in
+// the panel's cycle, and because it is the one section you reach for rather than
+// glance at -- the bottom of a phone is where a thumb already is.
+const P_HEAD_Y = 462;
+const P_CY = 474, P_CH = 68;
+const P_SY = 548, P_SH = 32;
+const P_TOP = 452;            // where the section starts taking presses
+
+const POMO_SET = 4;
+const HOLD_MS = 600, HELD_MS = 3000;   // the panel's own two stops
+
+const H = 604;
 const BODY_BOT = H - BAR_BOTTOM;
 
 // --- and its theme, still in RGB565 --------------------------------------------
@@ -712,6 +723,143 @@ function drawMac(m, cpu, macAge) {
   }
 }
 
+// --- the pomodoro ---------------------------------------------------------------------
+//
+// The one section here that is not a view of something else, and the one whose
+// state is not the Mac's. It is held by serve.py rather than in this page: a
+// phone throttles a locked tab's timers and would come back minutes wrong, a
+// closed tab is a lost countdown, and a phone and a laptop on the same page
+// would otherwise each be counting their own afternoon.
+//
+// It is a second timer, not a second view of the panel's -- the panel's own
+// lives in its millis() and cannot be read over any wire. Worth saying plainly,
+// because everything else on this page is the same reading the panel has.
+
+const PHASE_HUE  = { focus: C.MAGENTA, short: C.TEAL, long: C.VIOLET };
+// Short, because the chip shares its line with a 168px countdown. "LONG" rather
+// than "LONG BREAK" for that and nothing else.
+const PHASE_CHIP = { focus: 'FOCUS', short: 'BREAK', long: 'LONG' };
+
+// Rounded up, so a phase says 25:00 for the whole of its first second and 0:00
+// only when it is actually over. A timer that opens at 24:59 looks broken.
+function pomoClock(seconds) {
+  const s = Math.max(0, Math.ceil(seconds));
+  return `${Math.floor(s / 60)}:${pad2(s % 60)}`;
+}
+
+// What is left now. The server sends what was left when it answered; between
+// polls the countdown is this page's own arithmetic, so it moves every second
+// rather than every two.
+function pomoLeft(p) {
+  if (!p) return 0;
+  if (!p.running) return p.left;
+  return Math.max(0, p.left - (performance.now() - state.baseAt) / 1000);
+}
+
+function drawPomo(p, now) {
+  const phase = (p && p.phase) || 'focus';
+  const hue = PHASE_HUE[phase];
+  const left = pomoLeft(p);
+  const running = !!(p && p.running);
+  // Recomputed here rather than trusted from the payload: `fresh` was true when
+  // the server answered, and a phase that has been running for a second since
+  // is not fresh any more.
+  const fresh = !!p && !running && left >= p.len;
+
+  font(16);
+  text('Pomodoro', 8, P_HEAD_Y, C.VIOLET, 'ML');
+
+  // The phase, in a chip at the other end of the heading rather than on the card
+  // below it: the card is 168px of countdown wide, and a lozenge beside that is
+  // a lozenge crowding it.
+  const tag = PHASE_CHIP[phase];
+  chip(W - 8 - (tw(tag) + 12), P_HEAD_Y, tag, hue);
+
+  panelCard(CARD_X, P_CY, CARD_W, P_CH, hue);
+
+  if (!p) {
+    font(16);
+    text('waiting for the timer', W / 2, P_CY + P_CH / 2, C.ERR, 'MC');
+    return;
+  }
+
+  // Which of the three states the clock is in, in the corner of the card the
+  // digits leave free. The word is the only unambiguous answer -- a countdown
+  // that has stopped looks exactly like one nobody has started yet -- and the
+  // colour carries it from further away than the word can be read from.
+  font(16);
+  const word = running ? 'running' : fresh ? 'ready' : 'paused';
+  text(word, CARD_X + CARD_W - CARD_PAD, P_CY + 14,
+       running ? C.OK : fresh ? C.DIM : C.WARM, 'MR');
+
+  // Full white while it runs, dim before it has been started, and blinking
+  // between the two while it is paused -- the flip clock's colon again, and for
+  // its reason: a figure that has stopped moving needs to say which of the two
+  // happened. The last minute goes warm, on the severity ramp.
+  const ink = running ? (left < 60 ? C.WARM : C.TEXT)
+            : fresh   ? C.DIM
+                      : ((new Date(now * 1000).getSeconds() & 1) ? C.DIM : C.TEXT);
+
+  font(64);
+  const clock = pomoClock(left);
+  const m = ctx.measureText(clock);
+  ctx.fillStyle = css(ink);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(clock, W / 2,
+               P_CY + P_CH / 2 +
+               (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2);
+
+  // --- the set ------------------------------------------------------------------
+
+  panelCard(CARD_X, P_SY, CARD_W, P_SH, C.BLUE);
+
+  // The same chip, track and figure the usage gauges and the Mac's charge are
+  // made of, so the row lands where those rows land.
+  const t = barRow(CARD_X, CARD_W, P_SY + P_SH / 2, 'SET', C.BLUE,
+                   `${p.done} of ${POMO_SET}`, C.TEXT);
+
+  // Four cells rather than one fill, because what is being counted is four
+  // things and not a percentage. Each finished block takes one; the block
+  // running now fills its own as it goes, which is the only place here the
+  // minutes appear as a shape rather than as a figure.
+  if (t.w >= POMO_SET * 4) {
+    const gap = 4;
+    const cw = Math.floor((t.w - (POMO_SET - 1) * gap) / POMO_SET);
+    const y = P_SY + P_SH / 2 - BAR_H / 2;
+
+    for (let i = 0; i < POMO_SET; i++) {
+      const x = t.x + i * (cw + gap);
+      rect(x, y, cw, BAR_H, shade(C.BLUE, 34));
+
+      let fill = 0;
+      if (i < p.done) fill = cw;
+      else if (i === p.done && phase === 'focus' && !fresh) {
+        fill = Math.round(cw * (p.len - left) / p.len);
+      }
+      if (fill > 0) rect(x, y, Math.min(fill, cw), BAR_H, C.BLUE);
+    }
+  }
+}
+
+// What releasing the press now would do, in the panel's own words. Mid-press it
+// stops naming the hold and starts naming the stop below it, which is the only
+// reason a second stop is findable at all: nothing else could tell you that
+// going on holding buys something more.
+function pomoHint(p) {
+  if (press.on) {
+    const held = performance.now() - press.at;
+    if (held >= HELD_MS) return 'set cleared';
+    if (held >= HOLD_MS) return 'keep holding  clear set';
+  }
+  if (!p) return '';
+  const left = pomoLeft(p);
+  const fresh = !p.running && left >= p.len;
+  return p.running ? 'tap  pause, hold  reset'
+       : fresh     ? 'tap  start, hold  skip'
+                   : 'tap  resume, hold  reset';
+}
+
 // --- the chrome ---------------------------------------------------------------------
 
 // It blinks, in the red the rest of the panel keeps for things that are wrong.
@@ -753,11 +901,17 @@ function drawStatusBar(now, online, rest) {
        W - 6, BAR_TOP / 2, C.TEXT, 'MR');
 }
 
+// The right-hand hint is the one naming what the thumb already on the glass
+// will do, so it is the one that keeps its room. The left gives way when the
+// two would meet -- the same trade the Mac page makes between the uptime and
+// the cores' key, and for the same reason: a line that overlaps says less than
+// a line that drops a field.
 function drawHintBar(left, right) {
+  const cy = BODY_BOT + BAR_BOTTOM / 2;
   rect(0, BODY_BOT, W, BAR_BOTTOM, C.BAR);
   font(16);
-  text(left, 6, BODY_BOT + BAR_BOTTOM / 2, C.DIM, 'ML');
-  text(right, W - 6, BODY_BOT + BAR_BOTTOM / 2, C.DIM, 'MR');
+  text(right, W - 6, cy, C.DIM, 'MR');
+  if (6 + tw(left) + 12 < W - 6 - tw(right)) text(left, 6, cy, C.DIM, 'ML');
 }
 
 // --- what is on screen ----------------------------------------------------------------
@@ -769,6 +923,11 @@ const state = {
   baseNow: 0,        // the Mac's clock at that answer
   baseAt: 0,         // performance.now() when it arrived
 };
+
+// A press on the pomodoro section. The panel finds its third and fourth actions
+// by how long a button is held, and so does this -- one gesture, three depths,
+// and the hint bar naming whichever one letting go now would take.
+const press = { on: false, at: 0 };
 
 // The Mac's clock rather than the phone's. Every reset time in the payload is
 // an epoch the Mac worked out, and a phone whose clock has drifted would push
@@ -796,7 +955,14 @@ function render() {
   drawWeather(d.weather);
   drawUsage(d.usage, now, ageNow(d.usage));
   drawMac(d.mac, d.cpu, ageNow(d.mac));
-  drawHintBar('tap  refresh', state.busy ? 'refreshing' : 'auto 2s');
+  drawPomo(d.pomo, now);
+  drawHintBar(state.busy ? 'refreshing' : 'tap above  refresh', pomoHint(d.pomo));
+
+  // A phase that has run out is settled by the server, and the page is what
+  // notices: it holds the only clock ticking between polls. Asking straight
+  // away rather than waiting out the poll is the difference between a break
+  // that starts when the work ended and one that starts a second or two later.
+  if (d.pomo && d.pomo.running && pomoLeft(d.pomo) <= 0) poll();
 }
 
 // --- the readings -----------------------------------------------------------------------
@@ -861,20 +1027,87 @@ async function holdScreen() {
 // third of a second it is in flight and gives it back, which is what the panel
 // does and for the same reason -- 40ms frames all the time would be a phone
 // redrawing a still picture sixty times a minute for nothing.
-function tick() {
+// The faster frame, borrowed for a fold and for the length of a press, and given
+// straight back. 40ms rather than requestAnimationFrame's sixty a second, which
+// is the rate the panel folds a card at -- a fold is four cards and a press is a
+// hint bar, and neither is worth waking a phone's compositor sixty times a
+// second to redraw a page that is otherwise still.
+const FRAME_MS = 40;
+let fast = 0;
+
+function frame() {
   render();
-  if (flipping()) requestAnimationFrame(fold);
+  fast = (flipping() || press.on) ? setTimeout(frame, FRAME_MS) : 0;
 }
 
-function fold() {
+// One at a time: a press starting mid-fold would otherwise leave two loops
+// running and the page redrawing twice as often for as long as they overlap.
+function faster() {
+  if (!fast) frame();
+}
+
+function tick() {
   render();
-  if (flipping()) requestAnimationFrame(fold);
+  if (flipping() || press.on) faster();
 }
 
 addEventListener('resize', fit);
 addEventListener('orientationchange', fit);
 
-cv.addEventListener('click', poll);
+// Panel units from a pointer event, so the hit test is written in the same
+// coordinates everything is drawn in.
+function unitsY(ev) {
+  const r = cv.getBoundingClientRect();
+  return (ev.clientY - r.top) * H / r.height;
+}
+
+async function pomoDo(action) {
+  try {
+    const r = await fetch('/api/pomo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ do: action }),
+    });
+    const p = await r.json();
+    // Straight into what is on screen rather than waiting for the next poll: a
+    // button that takes two seconds to look pressed is one people press twice.
+    if (state.data) state.data.pomo = p;
+    state.baseAt = performance.now();
+    state.online = true;
+  } catch (e) {
+    state.online = false;
+  }
+  render();
+}
+
+cv.addEventListener('pointerdown', ev => {
+  if (unitsY(ev) < P_TOP) return;          // the rest of the page is a refresh
+  press.on = true;
+  press.at = performance.now();
+  // Capture so the release still lands here if the thumb drifts off the
+  // section. Guarded: a browser that will not give it up is a browser where the
+  // press should still work, not one where it throws on the way down.
+  try { cv.setPointerCapture(ev.pointerId); } catch (e) {}
+  render();
+  faster();                                // so the hint bar keeps up with the hold
+});
+
+// Three depths on one gesture, at the panel's own two stops. Deepest first:
+// clearing the set is the one that loses more than a phase.
+cv.addEventListener('pointerup', ev => {
+  if (!press.on) { poll(); return; }
+  const held = performance.now() - press.at;
+  press.on = false;
+  pomoDo(held >= HELD_MS ? 'clear' : held >= HOLD_MS ? 'hold' : 'start');
+});
+
+// A press the browser takes away -- a system gesture, a call arriving -- does
+// nothing at all. Only cancel: pointerleave fires under an active capture in
+// some browsers, and dropping a hold because a thumb drifted over the edge of
+// the canvas would lose the one gesture that has to survive being held.
+cv.addEventListener('pointercancel', () => {
+  if (press.on) { press.on = false; render(); }
+});
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
@@ -890,6 +1123,7 @@ document.addEventListener('visibilitychange', () => {
 Promise.all([
   document.fonts.load('16px PanelUI'),
   document.fonts.load('24px PanelUI'),
+  document.fonts.load('64px PanelUI'),
   document.fonts.load('88px PanelUI'),
 ]).catch(() => {}).then(() => {
   fit();
