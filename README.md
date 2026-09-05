@@ -425,44 +425,63 @@ stop being asked and the token never leaves the Mac. The weather goes the same
 way for a third reason: a phone on the Mac's own hotspot has no route to the
 internet, and the Mac does.
 
-The page is the panel: a 320-wide canvas drawn with the arithmetic in
-`main.cpp`, colours kept in RGB565 until they are written out so `shade()`
-there rounds where `shade()` here does, the type served off the same server as
-the face the `.vlw` fonts were baked from, and the fold when a minute turns
-borrowing a faster frame for the third of a second it is in flight exactly as
-the panel does.
+### Why it stopped being a drawing of the panel
 
-What differs is the height, and it is the only thing that had to. The panel has
-320×170 and shows one page of four; a phone has the room for three of them at
-once, so the clock, the two windows and the Mac are stacked rather than cycled —
-and the page dots that said which page you were on went with the cycling. Three
-smaller things follow from being a phone rather than a panel: the status bar
-says `HTTP` or `OFFLINE` where the panel says `USB` or `WiFi`; the hint bar
-names a tap, because the buttons it would otherwise name are not on the thing
-you are holding; and the panel's own vitals are not there and cannot be, since
-the heap, the PSRAM, the RSSI and the boot reason are the ESP32's and nothing
-on this side knows them.
+It began as the panel redrawn stroke for stroke on a 320-wide canvas, off
+`main.cpp`'s own arithmetic, and the fidelity is what broke it. Nothing on a
+canvas has a baseline until you work one out, so the 88px clock digits and the
+64px countdown were centred on what the browser said the ink of each glyph
+was — and `actualBoundingBoxAscent` is not the same number in Safari as in
+Chrome. It looked right where it was built and wrong on the phone it was built
+for: the clock digits climbed out of their cards and into the status bar, and
+the countdown ran into the word beside it. There is no fixing that by measuring
+more carefully, because the measurement is the thing that differs.
 
-The pomodoro is there, and it is the one section that is not a view of
-something else. Every other reading on the page is the Mac's; this is a state,
-and it is worth saying plainly that it is a **second timer** — the panel's own
-lives in its `millis()` and cannot be read over any wire, so the two do not and
-cannot agree.
+So the layout is the browser's job. Grid places the cards, flexbox aligns the
+rows, and nothing computes a text position. Every figure is set in tabular
+figures, which is the other half of what looked untidy — a column of
+percentages lines up whatever digits it happens to be showing, and a countdown
+stops shuffling sideways once a second.
+
+Laid out for a phone on its side, which is the shape the readings want:
+three columns — the clock and the weather, the two Claude Code windows, the
+pomodoro — with the Mac along the foot, where the row of cores has the width it
+has always wanted. Held upright it stacks into one column instead. The
+pomodoro's three depths of hold are three buttons now: a thumb on a phone is
+not two buttons on a panel, and `Start` beside `Reset` beside `Clear` is the
+whole gesture written down.
+
+The panel's four hues stay, because they still do the job they were picked for —
+teal, blue, violet and magenta say *which* reading you are looking at, and
+green, amber and red still say how that reading is doing, still kept clear of
+the first four.
+
+### The one thing on it that is not a reading
+
+The pomodoro. Every other section is the Mac's, fetched; this is a state, and
+it is a **second timer** — the panel's own lives in its `millis()` and cannot be
+read over any wire, so the two do not and cannot agree. Worth saying plainly,
+because everything around it on the page is the same reading the panel has.
 
 It is held by `serve.py` rather than in the browser. A phone throttles a locked
-tab's timers and would come back minutes wrong, a closed tab is a lost
+tab's timers and would come back minutes wrong — measured while building this,
+where a hidden tab stretched a 120 ms wait to 497 — a closed tab is a lost
 countdown, and a phone and a laptop on the same page would each be counting
 their own afternoon. Held on the server it is one countdown wherever it is
-opened, and it goes on running while nothing is looking at it — until the
-Terminal window closes, which takes it with everything else here.
+opened and it runs while nothing is looking, until the Terminal window closes
+and takes it with everything else here.
 
-The panel finds its third and fourth actions on a page with two buttons by how
-long one is held, and the page does the same with one thumb: a tap starts or
-stops, a hold past 600 ms resets the phase — or skips it, when it has not been
-started — and holding past three seconds throws away the set. Both stops are
-the firmware's own, and so is the hint bar changing under a thumb that is still
-down, which is the only thing that makes the second stop findable. A press
-anywhere above the section is the refresh.
+The phase machine is the firmware's: a block earns its place in the set only by
+running out, so a skip costs the credit; an earned break starts itself and the
+focus block after it does not, because that one is yours to begin. What the
+panel settles in its loop is settled here on the way past instead, and it
+cannot cascade — a break that ends loads a focus block *stopped*, so the chain
+halts at the next thing somebody has to start, however long the page was shut.
+
+`Reset` and `Skip` are the same button under two names, because they are the
+same question: leave this phase and take the next one. A phase not yet started
+has nothing to put back, so leaving it is a skip; one part-way through has, so
+it is a reset.
 
 What the phone gets it gets over plain HTTP with no token, so anyone on the
 network can read it: the usage percentages, the reset times, and this Mac's

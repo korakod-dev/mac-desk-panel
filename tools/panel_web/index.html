@@ -3,254 +3,445 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#080c08">
+<meta name="theme-color" content="#0b0e10">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="mobile-web-app-capable" content="yes">
 <title>Desk panel</title>
 
 <!--
-  The panel, as one page.
+  The desk panel's readings, laid out for a phone held sideways.
 
-  Drawn on a 320-wide canvas with the arithmetic in src/dashboard/main.cpp,
-  scaled up to whatever the phone gives it -- not rebuilt out of divs at a
-  phone's proportions. The point of looking at this is that it is the panel:
-  the same cards in the same hues, the same gradient across the same bar, the
-  same fold when a minute turns.
+  This used to be the panel redrawn stroke for stroke on a 320-wide canvas, and
+  the fidelity is what broke it. Nothing on a canvas has a baseline until you
+  work one out, so the big faces were centred on what the browser said the ink
+  of each glyph was -- and Safari and Chrome do not say the same thing. On the
+  phone the clock digits climbed out of their cards and the countdown ran into
+  the word beside it. There is no fixing that by measuring more carefully: the
+  measurement is the thing that differs.
 
-  What is different is the height, and it is the only thing that had to be. The
-  panel has 320x170 and shows one page of four at a time; a phone has the
-  height to hold three of them at once, so the clock, the two Claude Code
-  windows and the Mac are stacked rather than cycled, and the page dots that
-  used to say which one you were on are gone with the cycling. Everything else
-  keeps the panel's own y-arithmetic within its section.
+  So the layout is the browser's job now. Grid places the cards, flexbox aligns
+  the rows, and every figure is set in tabular figures so that a column of them
+  lines up whatever digits it happens to be showing -- which is the other half
+  of what looked untidy. Nothing here computes a text position.
 
-  Colours are kept as RGB565 and converted on the way out, so shade() here
-  rounds where shade() on the panel rounds. Type is the face the .vlw fonts
-  were baked from, served off the same server, so a phone with no route to the
-  internet still gets it.
-
-  Three things are honestly not the same, and are not pretending to be:
-
-    - the status bar says HTTP or OFFLINE where the panel says USB or WiFi,
-      because that is what the link is here.
-    - the hint bar names what a phone can do. The panel's hints name buttons
-      that are not on this thing.
-    - the panel's own vitals are not here and cannot be. Heap, PSRAM, RSSI and
-      the boot reason are the ESP32's, and nothing on this side knows them.
+  The panel's four hues stay, because they still do the job they were picked
+  for: they say which reading you are looking at, not how it is doing. Green,
+  amber and red still say the second thing and are still kept clear of the
+  first.
 -->
 
 <style>
   @font-face {
-    font-family: PanelUI;
+    font-family: Panel;
     src: url(/font.ttf) format('truetype');
-    font-display: block;
+    font-display: swap;
   }
+
+  :root {
+    --bg:      #0b0e10;
+    --card:    #151a1d;
+    --line:    #232b2f;
+    --text:    #e9eff1;
+    --dim:     #8c999e;
+    --faint:   #5c686d;
+
+    /* which reading this is */
+    --teal:    #19bfae;
+    --blue:    #4b8ef7;
+    --violet:  #9b7bf5;
+    --pink:    #f0559b;
+
+    /* how that reading is doing */
+    --ok:      #35d07f;
+    --warn:    #ffab40;
+    --err:     #ff5f57;
+
+    --gap:     10px;
+    --radius:  14px;
+
+    font-family: Panel, -apple-system, system-ui, "Segoe UI", sans-serif;
+    /* Every digit the same width, so a column of figures lines up and a
+       countdown does not shuffle sideways once a second. */
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  * { box-sizing: border-box; }
 
   html, body {
     margin: 0;
     height: 100%;
-    background: #080c08;   /* C_BG, the panel's own near-black */
+    background: var(--bg);
+    color: var(--text);
+    -webkit-text-size-adjust: 100%;
   }
 
   body {
     display: flex;
-    align-items: center;
-    justify-content: center;
+    flex-direction: column;
+    padding: var(--gap);
+    padding: max(var(--gap), env(safe-area-inset-top))
+             max(var(--gap), env(safe-area-inset-right))
+             max(var(--gap), env(safe-area-inset-bottom))
+             max(var(--gap), env(safe-area-inset-left));
+    gap: var(--gap);
     overscroll-behavior: none;
-    -webkit-user-select: none;
-    user-select: none;
+    overflow: auto;
     -webkit-tap-highlight-color: transparent;
   }
 
-  canvas { display: block; touch-action: none; }
+  /* --- the bar across the top ------------------------------------------- */
+
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--dim);
+    flex: none;
+  }
+
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--ok);
+    flex: none;
+  }
+  .bar.off .dot { background: var(--err); }
+  .bar.off .link { color: var(--err); }
+
+  .bar .spacer { flex: 1; }
+
+  button {
+    font: inherit;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 7px 16px;
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  button:active { background: #1d2427; }
+  button:disabled { color: var(--faint); }
+
+  /* --- the cards --------------------------------------------------------- */
+
+  main {
+    flex: 1;
+    display: grid;
+    gap: var(--gap);
+    grid-template-columns: 1fr;
+    grid-template-areas: "clock" "usage" "mac" "pomo";
+    min-height: 0;
+  }
+
+  /* Sideways is what this is for: three columns of readings with the Mac's
+     row of cores along the foot, where the width it wants is free. */
+  @media (orientation: landscape) {
+    main {
+      grid-template-columns: 1fr 1.2fr 1fr;
+      grid-template-rows: 1fr auto;
+      grid-template-areas:
+        "clock usage pomo"
+        "mac   mac   mac";
+    }
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-top: 2px solid var(--hue, var(--line));
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  @media (orientation: landscape) and (max-height: 460px) {
+    body { --gap: 8px; }
+    .card { padding: 9px 12px; gap: 7px; }
+    .bar { font-size: 12px; }
+    .bar button { padding: 5px 13px; }
+  }
+
+  .clock { grid-area: clock; --hue: var(--teal); }
+  .usage { grid-area: usage; --hue: var(--pink); }
+  .mac   { grid-area: mac;   --hue: var(--blue); }
+  .pomo  { grid-area: pomo;  --hue: var(--violet); }
+
+  .head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--hue);
+    flex: none;
+  }
+  .head .note {
+    margin-left: auto;
+    letter-spacing: 0;
+    text-transform: none;
+    font-size: 12px;
+    color: var(--dim);
+  }
+  .note.stale { color: var(--warn); }
+
+  /* --- clock -------------------------------------------------------------- */
+
+  .display {
+    font-size: clamp(36px, 12vh, 80px);
+    line-height: 1;
+    font-weight: 300;
+    letter-spacing: -0.02em;
+    /* One place to look for the time, so it takes whatever room is spare. */
+    margin: auto 0;
+    text-align: center;
+  }
+
+  .under {
+    display: flex;
+    justify-content: center;
+    gap: 14px;
+    font-size: 14px;
+    color: var(--dim);
+    flex: none;
+    flex-wrap: wrap;
+  }
+  .under b { font-weight: 500; }
+
+  /* --- a gauge ------------------------------------------------------------ */
+
+  /* The two windows, and the charge, spaced apart rather than stacked tight:
+     each is a tag, a bar, a figure and a line of small print, and two of them
+     touching reads as one block of eight things. */
+  #usage-body {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 16px;
+    flex: 1;
+  }
+
+  .gauge {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 6px 10px;
+  }
+
+  .tag {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    padding: 3px 7px;
+    border-radius: 6px;
+    color: #0b0e10;
+    background: var(--tint, var(--hue));
+    min-width: 34px;
+    text-align: center;
+  }
+
+  .track {
+    height: 12px;
+    border-radius: 6px;
+    background: #0d1113;
+    overflow: hidden;
+    min-width: 0;
+  }
+
+  /* The fill is a window onto a full-width ramp rather than a bar of its own
+     colour, so the hue at any point along it means the same thing whatever the
+     reading is -- green while there is room, red as the window fills. */
+  .fill {
+    height: 100%;
+    width: calc(var(--f, 0) * 100%);
+    overflow: hidden;
+    border-radius: 6px;
+    position: relative;
+  }
+  .fill i {
+    position: absolute;
+    inset: 0;
+    width: calc(100% / max(var(--f, 1), 0.001));
+    background: linear-gradient(90deg, #35d07f, #b6e34a 45%, #ffab40 72%, #ff5f57);
+  }
+  .fill.flat i { background: var(--flat, var(--ok)); }
+
+  .figure {
+    font-size: clamp(19px, 4.2vmin, 26px);
+    font-weight: 500;
+    line-height: 1;
+    /* Room for three digits and a sign, so 5% and 100% end in the same place. */
+    min-width: 3.4em;
+    text-align: right;
+  }
+
+  .sub {
+    grid-column: 1 / -1;
+    font-size: 12px;
+    color: var(--dim);
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .sub .sep { color: var(--faint); }
+
+  /* --- the Mac ------------------------------------------------------------ */
+
+  .macrow {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: 1fr;
+    align-items: center;
+  }
+  @media (orientation: landscape) {
+    .macrow { grid-template-columns: minmax(0, 1.1fr) auto minmax(0, 1fr); }
+  }
+
+  .cells {
+    display: flex;
+    gap: 8px;
+  }
+  .cell {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 9px;
+    background: #0d1113;
+    border: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  .cell .k { font-size: 11px; color: var(--dim); }
+  .cell .v { font-size: 15px; font-weight: 500; margin-left: auto; }
+
+  .cores {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 36px;
+    min-width: 0;
+  }
+  .cores i {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(
+      to top,
+      var(--c) calc(var(--v, 0) * 100%),
+      color-mix(in srgb, var(--c) 22%, transparent) calc(var(--v, 0) * 100%));
+  }
+  .cores .split { flex: 0 0 10px; background: none; }
+
+  /* --- the pomodoro -------------------------------------------------------- */
+
+  .set {
+    display: flex;
+    gap: 6px;
+    flex: none;
+  }
+  .set i {
+    flex: 1;
+    height: 10px;
+    border-radius: 5px;
+    background: #0d1113;
+    border: 1px solid var(--line);
+    overflow: hidden;
+  }
+  .set i b {
+    display: block;
+    height: 100%;
+    width: calc(var(--f, 0) * 100%);
+    background: var(--violet);
+  }
+
+  .buttons {
+    display: flex;
+    gap: 8px;
+    flex: none;
+  }
+  .buttons button { flex: 1; padding: 10px 8px; }
+  .buttons .go {
+    background: var(--violet);
+    border-color: var(--violet);
+    color: #0b0e10;
+    font-weight: 600;
+  }
+  .buttons .go:active { background: #8a68e8; }
+
+  .state { font-size: 13px; }
+  .state.running { color: var(--ok); }
+  .state.paused  { color: var(--warn); }
+  .state.ready   { color: var(--dim); }
+
+  .miss { color: var(--err); font-size: 13px; }
 </style>
 </head>
 
 <body>
-<canvas id="panel"></canvas>
+
+<div class="bar" id="bar">
+  <span class="dot"></span>
+  <span class="link" id="link">connected</span>
+  <span class="spacer"></span>
+  <span id="stamp"></span>
+  <button id="refresh">Refresh</button>
+</div>
+
+<main>
+  <section class="card clock">
+    <div class="head">Time<span class="note" id="date"></span></div>
+    <div class="display" id="clock">--:--</div>
+    <div class="under" id="weather"></div>
+  </section>
+
+  <section class="card usage">
+    <div class="head">Claude Code<span class="note" id="usage-age"></span></div>
+    <div id="usage-body"></div>
+  </section>
+
+  <section class="card mac">
+    <div class="head">MacBook<span class="note" id="mac-note"></span></div>
+    <div id="mac-body"></div>
+  </section>
+
+  <section class="card pomo">
+    <div class="head">Pomodoro<span class="note state" id="pomo-state"></span></div>
+    <div class="display" id="pomo-clock" style="font-size: clamp(32px, 10vh, 64px)">--:--</div>
+    <div class="set" id="pomo-set"></div>
+    <div class="buttons">
+      <button class="go" id="pomo-go">Start</button>
+      <button id="pomo-hold">Reset</button>
+      <button id="pomo-clear">Clear</button>
+    </div>
+  </section>
+</main>
 
 <script>
 "use strict";
 
-// --- the panel's geometry, from src/dashboard/main.cpp -------------------------
+const $ = id => document.getElementById(id);
 
-const W = 320;
-const BAR_TOP = 20, BAR_BOTTOM = 18;
-
-const CARD_X = 4, CARD_W = W - 8, CARD_R = 6, CARD_PAD = 6;
-const BAR_H = 14;
-
-// The flip clock, at the panel's own dimensions. Only FLIP_TOP moves, and only
-// because the section under it is no longer a page away.
-const FLIP_W = 68, FLIP_H = 88, FLIP_TOP = 28, FLIP_R = 8;
-const FLIP_PAIR = 6, FLIP_COLON = 22;
-const FLIP_MID = FLIP_TOP + FLIP_H / 2;
-const FLIP_HALF = FLIP_H / 2;
-const FLIP_MS = 360;
-const WEATHER_Y = 138;
-
-// Claude Code usage: a heading and two gauges, at the panel's 56px pitch.
-const U_HEAD_Y = 164;
-const U_G1 = 176, U_G2 = 232, U_CH = 52;
-
-// The Mac: a heading, the charge card, the three cells, the cores.
-const M_HEAD_Y = 306;
-const M_BY = 318, M_BCH = 48;
-const M_BAR_Y = M_BY + 15, M_DETAIL_Y = M_BY + 35;
-const M_GRID_Y = 374, M_GRID_H = 26;
-const M_CTOP = 410, M_CBOT = 440;
-
-// The pomodoro, at the panel's own dimensions again. Last because it is last in
-// the panel's cycle, and because it is the one section you reach for rather than
-// glance at -- the bottom of a phone is where a thumb already is.
-const P_HEAD_Y = 462;
-const P_CY = 474, P_CH = 68;
-const P_SY = 548, P_SH = 32;
-const P_TOP = 452;            // where the section starts taking presses
-
-const POMO_SET = 4;
-const HOLD_MS = 600, HELD_MS = 3000;   // the panel's own two stops
-
-const H = 604;
-const BODY_BOT = H - BAR_BOTTOM;
-
-// --- and its theme, still in RGB565 --------------------------------------------
-
-const C = {
-  BG: 0x0861, BAR: 0x18E3, TEXT: 0xFFFF, DIM: 0x8C71,
-  ACCENT: 0x05FF, WARM: 0xFD20, OK: 0x2FEB, ERR: 0xF9C7,
-  TEAL: 0x0656, BLUE: 0x2BDF, VIOLET: 0x8A7F, MAGENTA: 0xF9F4,
-};
-const FLIP_HUES = [C.TEAL, C.BLUE, C.VIOLET, C.MAGENTA];
-const C_ECORE = C.TEAL, C_PCORE = C.MAGENTA;
-
-// A darker cast of a colour, scaled in RGB565's own channel widths -- the same
-// truncation the panel does, so a card is the same colour on both.
-function shade(c, pct) {
-  const r = (c >> 11) & 0x1F, g = (c >> 5) & 0x3F, b = c & 0x1F;
-  return ((((r * pct / 100) | 0) << 11) |
-          (((g * pct / 100) | 0) << 5) |
-          ((b * pct / 100) | 0));
-}
-
-// 565 out to 888 by bit replication, which is what the driver does on the way
-// to the glass.
-function css(c) {
-  const r = (c >> 11) & 0x1F, g = (c >> 5) & 0x3F, b = c & 0x1F;
-  return `rgb(${(r << 3) | (r >> 2)},${(g << 2) | (g >> 4)},${(b << 3) | (b >> 2)})`;
-}
-
-// --- the drawing primitives TFT_eSPI gives the firmware -------------------------
-
-const cv = document.getElementById("panel");
-const ctx = cv.getContext("2d");
-
-// One device pixel, in the panel's own units. Set by fit(), and needed by the
-// one thing here drawn a pixel at a time.
-let PXW = 1;
-
-function rect(x, y, w, h, c) {
-  ctx.fillStyle = css(c);
-  ctx.fillRect(x, y, w, h);
-}
-
-function roundPath(x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-
-function fillRound(x, y, w, h, r, c) {
-  ctx.fillStyle = css(c);
-  roundPath(x, y, w, h, r);
-  ctx.fill();
-}
-
-function drawRound(x, y, w, h, r, c) {
-  ctx.strokeStyle = css(c);
-  ctx.lineWidth = 1;
-  roundPath(x + 0.5, y + 0.5, w - 1, h - 1, r);
-  ctx.stroke();
-}
-
-// fillCircle(x, y, r) on the panel covers 2r+1 pixels across, centred on the
-// pixel at x,y -- hence the half-pixel offsets.
-function circle(x, y, r, c) {
-  ctx.fillStyle = css(c);
-  ctx.beginPath();
-  ctx.arc(x + 0.5, y + 0.5, r + 0.5, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function hline(x, y, w, c) { rect(x, y, w, 1, c); }
-
-// The panel's setViewport, which is how the fold gets its shape.
-function clipTo(x, y, w, h, draw) {
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(x, y, w, h);
-  ctx.clip();
-  draw();
-  ctx.restore();
-}
-
-function font(px) { ctx.font = px + 'px PanelUI, system-ui, sans-serif'; }
-function tw(s)    { return Math.round(ctx.measureText(s).width); }
-
-// The datum strings are TFT_eSPI's: first letter the vertical anchor, second
-// the horizontal one.
-function text(s, x, y, c, datum) {
-  ctx.fillStyle = css(c);
-  ctx.textAlign = datum[1] === 'L' ? 'left' : datum[1] === 'R' ? 'right' : 'center';
-  ctx.textBaseline = datum[0] === 'M' ? 'middle' : 'top';
-  ctx.fillText(s, x, y);
-}
-
-// --- the two ramps ---------------------------------------------------------------
-
-// Cool-to-hot across a filled bar, matching the terminal's status line.
-function rampColor(t) {
-  let r, g;
-  if (t < 0.5) { r = (t * 2 * 255) | 0; g = 255; }
-  else         { r = 255; g = ((1 - t) * 2 * 255) | 0; }
-  return ((r & 0xF8) << 8) | ((g & 0xFC) << 3);
-}
-
-function severityColor(pct) {
-  if (pct >= 85) return C.ERR;
-  if (pct >= 60) return C.WARM;
-  return C.OK;
-}
-
-// Charge reads the opposite way to the usage windows: a full bar is the good
-// end, so severityColor() would paint a healthy battery red.
-function chargeColor(pct) {
-  if (pct <= 20) return C.ERR;
-  if (pct <= 50) return C.WARM;
-  return C.OK;
-}
-
-function tempColor(t) {
-  if (t >= 35) return C.ERR;
-  if (t >= 30) return C.WARM;
-  if (t <= 20) return C.ACCENT;
-  return C.OK;
-}
-
-// --- spans and clocks -------------------------------------------------------------
+// --- small shared pieces --------------------------------------------------------
 
 const WDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MON  = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
               'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 const pad2 = n => String(n).padStart(2, '0');
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
-// "2d 5h" / "3h 05m" / "12m", empty for anything non-positive.
+// "2d 5h" / "3h 05m" / "12m", empty for anything non-positive -- the panel's
+// own spans, at the precision that still matters at each size.
 function spanText(seconds) {
   if (!(seconds > 0)) return '';
   const dd = Math.floor(seconds / 86400);
@@ -263,673 +454,47 @@ function spanText(seconds) {
 
 // Wall-clock reset, with the weekday once it is more than a day out.
 function resetClock(reset, now) {
-  if (reset <= 0) return '';
+  if (!(reset > 0)) return '';
   const d = new Date(reset * 1000);
   const clock = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
   return reset < now + 86400 ? clock : `${WDAY[d.getDay()]} ${clock}`;
 }
 
-// --- the shapes the sections are built from ----------------------------------------
+// The severity ramp, kept for the figures that are actually graded.
+const severity = p => p >= 85 ? 'var(--err)' : p >= 60 ? 'var(--warn)' : 'var(--ok)';
+// Charge reads the other way round: a full bar is the good end.
+const charge   = p => p <= 20 ? 'var(--err)' : p <= 50 ? 'var(--warn)' : 'var(--ok)';
+const tempCol  = t => t >= 35 ? 'var(--err)' : t >= 30 ? 'var(--warn)'
+                    : t <= 20 ? 'var(--teal)' : 'var(--ok)';
 
-function cardBody(x, y, w, h, r, top, bot) {
-  const half = h >> 1;
-  fillRound(x, y, w, h, r, top);
-  fillRound(x, y + half, w, h - half, r, bot);
-  rect(x, y + half, w, r, bot);
+// One gauge: a tag, a track, a figure, and a line of small print under all
+// three. Written once so the usage windows and the Mac's charge line up
+// because they are the same markup, not because two sets of numbers were kept
+// in step by hand.
+function gauge({ tag, tint, pct, fill, figure, sub }) {
+  const f = Math.max(0, Math.min(100, pct)) / 100;
+  return `<div class="gauge">
+    <span class="tag" style="--tint:${tint}">${esc(tag)}</span>
+    <div class="track"><div class="fill ${fill ? 'flat' : ''}"
+         style="--f:${f.toFixed(4)}${fill ? ';--flat:' + fill : ''}"><i></i></div></div>
+    <span class="figure" style="color:${figure.color}">${esc(figure.text)}</span>
+    ${sub ? `<div class="sub">${sub}</div>` : ''}
+  </div>`;
 }
 
-function panelCard(x, y, w, h, hue) {
-  cardBody(x, y, w, h, CARD_R, shade(hue, 26), shade(hue, 18));
-  drawRound(x, y, w, h, CARD_R, shade(hue, 62));
-}
+const sep = ' <span class="sep">&middot;</span> ';
 
-function chip(x, cy, label, hue) {
-  font(16);
-  const w = tw(label) + 12, h = 18;
-  fillRound(x, cy - h / 2, w, h, 5, hue);
-  text(label, x + w / 2, cy, C.BG, 'MC');
-  return x + w;
-}
-
-// Label left, value right, within a column. Values that would run into the
-// label are clipped rather than written over it.
-function row(x, w, y, label, value, color, labelColor) {
-  font(16);
-  text(label, x, y, labelColor === undefined ? C.DIM : labelColor, 'TL');
-
-  const avail = w - tw(label) - 8;
-  let shown = String(value);
-  if (tw(shown) > avail) {
-    while (shown.length > 1 && tw(shown + '..') > avail) shown = shown.slice(0, -1);
-    shown += '..';
-  }
-  text(shown, x + w, y, color, 'TR');
-}
-
-// A chip, a track, and the figure the track is a picture of. Shared so that the
-// usage gauges and the Mac's charge line up because they are the same code.
-function barRow(cx, cw, cy, label, hue, value, valueColor) {
-  const left = chip(cx + CARD_PAD, cy, label, hue) + 10;
-
-  font(24);
-  let right = cx + cw - CARD_PAD;
-  if (value) {
-    text(value, right, cy, valueColor, 'MR');
-    right -= tw(value) + 10;
-  }
-
-  const t = { x: left, w: right - left };
-  if (t.w > 0) rect(t.x, cy - BAR_H / 2, t.w, BAR_H, shade(hue, 10));
-  return t;
-}
-
-// Each column is a pixel of the panel and rather more than a pixel here, so it
-// is drawn a device pixel wider and laid over the one after it. Butted exactly
-// edge to edge, every seam lands mid-pixel and gets antialiased against the
-// background, and a smooth ramp comes out combed.
-function gradientFill(t, cy, pct) {
-  let filled = Math.floor(t.w * pct / 100);
-  if (filled > t.w) filled = t.w;
-  if (filled < 2 && pct > 0) filled = 2;
-  for (let x = 0; x < filled; x++) {
-    rect(t.x + x, cy - BAR_H / 2, x === filled - 1 ? 1 : 1 + PXW, BAR_H,
-         rampColor(x / t.w));
-  }
-}
-
-// The separator under a bar: a drawn dot, because make_vlw.py bakes printable
-// ASCII and the degree sign and a middle dot would come out blank. Kept drawn
-// here so the two sides say the same thing in the same shape.
-function detailLine(x, y, head, tail) {
-  font(16);
-  text(head, x, y, C.DIM, 'ML');
-  if (!tail) return;
-  const dx = x + tw(head) + 9;
-  circle(dx, y, 1, C.DIM);
-  text(tail, dx + 9, y, C.DIM, 'ML');
-}
-
-// --- the flip clock ----------------------------------------------------------------
-
-// Left edge of card i. 4*68 + 2*6 + 22 comes to 306 of the 320 there are.
-function flipX(i) {
-  const span = 4 * FLIP_W + 2 * FLIP_PAIR + FLIP_COLON;
-  return (W - span) / 2 + i * (FLIP_W + FLIP_PAIR) +
-         (i >= 2 ? FLIP_COLON - FLIP_PAIR : 0);
-}
-
-// One whole card: the two-tone body, the digit over it, and the seam over that.
-// `lit` scales the colour -- 100 is a card at rest, less is one in flight.
-//
-// The digit is centred on its ink rather than on its line box. The firmware
-// carries a measured 4px fudge for this because TFT_eSPI will not tell it where
-// the ink is; a canvas will, so it is asked.
-function flipFace(x, hue, d, lit) {
-  cardBody(x, FLIP_TOP, FLIP_W, FLIP_H, FLIP_R,
-           shade(hue, lit), shade(hue, (lit * 72 / 100) | 0));
-
-  font(88);
-  const m = ctx.measureText(d);
-  const ink = (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
-  ctx.fillStyle = css(shade(C.TEXT, lit));
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillText(d, x + FLIP_W / 2, FLIP_MID + ink);
-
-  // Last, and over the digit: a split-flap's split runs through the number.
-  hline(x, FLIP_MID - 1, FLIP_W, C.BG);
-  hline(x, FLIP_MID, FLIP_W, shade(hue, 35));
-}
-
-const flipShown = ['-', '-', '-', '-'];
-const flipFrom  = ['-', '-', '-', '-'];
-let flipMask = 0, flipStart = 0, flipSeeded = false;
-
-function flipping() { return flipStart !== 0; }
-
-// Noticed here rather than in the poll, because here is where the clock is
-// already being read.
-function flipSet(face) {
-  let moved = 0;
-  for (let i = 0; i < 4; i++) {
-    if (face[i] === flipShown[i]) continue;
-    flipFrom[i] = flipShown[i];
-    flipShown[i] = face[i];
-    moved |= 1 << i;
-  }
-  // The first draw of all only ever seeds the cards. Later ones fold whatever
-  // has changed, including the several that will have changed while the phone
-  // was in a pocket -- arriving to find the clock catching up to itself is what
-  // a split-flap board does.
-  if (moved && flipSeeded) { flipMask = moved; flipStart = performance.now(); }
-  flipSeeded = true;
-}
-
-function drawFlip(now) {
-  const d = new Date(now * 1000);
-  flipSet(pad2(d.getHours()) + pad2(d.getMinutes()));
-
-  let elapsed = flipStart ? performance.now() - flipStart : FLIP_MS;
-  if (elapsed >= FLIP_MS) { flipStart = 0; flipMask = 0; elapsed = FLIP_MS; }
-
-  for (let i = 0; i < 4; i++) {
-    const x = flipX(i), hue = FLIP_HUES[i];
-
-    if (!(flipMask & (1 << i))) { flipFace(x, hue, flipShown[i], 100); continue; }
-
-    // What the fold happens over: the new digit's upper half already in place,
-    // the old one's lower half still standing until the leaf comes down to it.
-    flipFace(x, hue, flipShown[i], 100);
-    clipTo(x, FLIP_MID, FLIP_W, FLIP_H - FLIP_HALF,
-           () => flipFace(x, hue, flipFrom[i], 100));
-
-    const t = elapsed / FLIP_MS;
-    if (t < 0.5) {
-      // The old upper leaf closing onto the seam, darkening as it turns away.
-      const p = t * 2, h = (FLIP_HALF * (1 - p)) | 0;
-      if (h > 0) {
-        clipTo(x, FLIP_MID - h, FLIP_W, h,
-               () => flipFace(x, hue, flipFrom[i], (100 - 45 * p) | 0));
-      }
-    } else {
-      // The new lower leaf opening back out of it, brightening as it comes
-      // round to face you.
-      const p = t * 2 - 1, h = (FLIP_HALF * p) | 0;
-      if (h > 0) {
-        clipTo(x, FLIP_MID, FLIP_W, h,
-               () => flipFace(x, hue, flipShown[i], (55 + 45 * p) | 0));
-      }
-    }
-  }
-
-  // The colon belongs to neither pair and would have to be a fifth card to be
-  // typed, so it is drawn. It softens on the odd second and comes back on the
-  // even, which is this section's only answer to "is this thing still running".
-  const dot = (new Date(now * 1000).getSeconds() & 1) ? C.DIM : C.TEXT;
-  const cx = (flipX(1) + FLIP_W + flipX(2)) / 2;
-  circle(cx, FLIP_MID - 16, 4, dot);
-  circle(cx, FLIP_MID + 16, 4, dot);
-}
-
-// The strip under the cards: how warm it is, and what that feels like.
-function drawWeather(w) {
-  if (!w || w.error || w.temp === undefined) {
-    font(16);
-    text(w && w.error ? w.error : 'loading...', W / 2, WEATHER_Y, C.ERR, 'MC');
-    return;
-  }
-
-  // Rounded to the degree: the tenth is not a figure anybody reads off a panel
-  // across a room.
-  const air = Math.round(w.temp) + '°';
-  const feel = Math.round(w.feels) + '°';
-  const tag = 'feels like';
-
-  // Measured in both faces before anything is drawn, because the whole group is
-  // centred and its width is not known until every piece has been asked.
-  font(24);
-  const wAir = tw(air);
-  font(16);
-  const wTag = tw(tag), wFeel = tw(feel);
-
-  const GAP = 14;
-  let x = (W - (wAir + GAP + 2 + GAP + wTag + 6 + wFeel)) / 2;
-
-  font(24);
-  text(air, x, WEATHER_Y, tempColor(w.temp), 'ML');
-  x += wAir + GAP;
-
-  circle(x + 1, WEATHER_Y, 1, C.DIM);
-  x += 2 + GAP;
-
-  font(16);
-  text(tag, x, WEATHER_Y, C.DIM, 'ML');
-  x += wTag + 6;
-
-  // The label stays dim and the figure carries the colour, so that the gap
-  // between 31 and 38 is what the line is for.
-  text(feel, x, WEATHER_Y, tempColor(w.feels), 'ML');
-}
-
-// --- Claude Code usage ---------------------------------------------------------------
-
-// One window, on one card. The card says which window; the gradient across the
-// bar and the colour of the figure say how full it is.
-function gauge(label, y, hue, pct, reset, now) {
-  const cy = y + 16;
-  panelCard(CARD_X, y, CARD_W, U_CH, hue);
-
-  if (!(pct >= 0)) {
-    const t = barRow(CARD_X, CARD_W, cy, label, hue, '', C.DIM);
-    font(16);
-    text('waiting for a reading', t.x + 8, cy, C.DIM, 'ML');
-    return;
-  }
-
-  const t = barRow(CARD_X, CARD_W, cy, label, hue, pct + '%', severityColor(pct));
-  gradientFill(t, cy, pct);
-
-  if (!reset || reset <= 0) return;
-  detailLine(CARD_X + CARD_PAD, y + 38,
-             'resets ' + resetClock(reset, now), spanText(reset - now) &&
-             'in ' + spanText(reset - now));
-}
-
-function drawUsage(u, now, age) {
-  font(16);
-  text('Claude Code usage', 8, U_HEAD_Y, C.MAGENTA, 'ML');
-
-  const valid = u && !u.error && (u.h5 >= 0 || u.d7 >= 0);
-
-  if (!valid) {
-    // The heading stays and the cards go: two empty cards would say the reading
-    // was zero rather than absent.
-    text(u && u.error ? u.error : 'waiting for a reading',
-         W / 2, U_G1 + 40, C.ERR, 'MC');
-    return;
-  }
-
-  // How old the reading is matters as much as the reading: the files behind it
-  // only move when something else writes them. One the host went and asked for
-  // says "live" instead of counting the seconds since.
-  if (age >= 0) {
-    const label = u.live ? 'live'
-                : age < 90 ? age + 's ago'
-                           : Math.floor(age / 60) + 'm ago';
-    text(label, W - 8, U_HEAD_Y, age > 900 ? C.WARM : C.DIM, 'MR');
-  }
-
-  gauge('5H', U_G1, C.TEAL,   u.h5, u.h5_reset, now);
-  gauge('7D', U_G2, C.VIOLET, u.d7, u.d7_reset, now);
-}
-
-// --- the Mac -------------------------------------------------------------------------
-
-// Column width and gap for the n core bars. Ported from layout.h, which the
-// firmware's own test exercises: gaps give way before bars do, because past a
-// dozen cores the separations would cost more of the panel than the things
-// being separated.
-function cpuBarLayout(n, width, margin, split) {
-  if (n < 1) n = 1;
-  const gap = n <= 12 ? 4 : n <= 20 ? 3 : 2;
-  let bw = Math.floor((width - 2 * margin - split - (n - 1) * gap) / n);
-  if (bw > 22) bw = 22;
-  if (bw < 2) bw = 2;
-  return { bw, gap };
-}
-
-// How the panel words the display field. "asleep" is the reason for the
-// translation: the server means the screens are off while the machine is up,
-// and "asleep" printed beside "MacBook" says the opposite of what it means.
-function screenWord(display, answering) {
-  if (!answering) return 'not answering';
-  return display === 'external' ? 'external'
-       : display === 'builtin'  ? 'built-in'
-       : display === 'asleep'   ? 'screen off'
-       : display === 'none'     ? 'no screen'
-                                : null;
-}
-
-function drawMac(m, cpu, macAge) {
-  const valid = m && !m.error;
-  const answering = valid && macAge >= 0 && macAge <= 30;
-
-  font(16);
-  text('MacBook', 8, M_HEAD_Y, C.BLUE, 'ML');
-  let headLeft = 8 + tw('MacBook');
-
-  // A failed poll leaves the last reading on screen rather than blanking the
-  // section, so the age has to be visible or a charge figure from hours ago
-  // reads as current. Shown only once it is old enough to mislead.
-  if (valid && macAge > 90) {
-    const stale = Math.floor(macAge / 60) + 'm ago';
-    text(stale, headLeft + 10, M_HEAD_Y, C.WARM, 'ML');
-    headLeft += 10 + tw(stale);
-  }
-
-  let headRight = W - 8;
-
-  // The power state sits opposite the heading -- the one word that changes what
-  // the battery number means.
-  if (valid && m.bat_state) {
-    const onPower = m.bat_state !== 'discharging';
-    text(m.bat_state, headRight, M_HEAD_Y, onPower ? C.OK : C.DIM, 'MR');
-    headRight -= tw(m.bat_state) + 12;
-  }
-
-  if (valid && m.display) {
-    const word = screenWord(m.display, answering);
-    // Gives way to the staleness badge, which is the one that says whether any
-    // of this is worth reading at all.
-    if (word && headRight - tw(word) > headLeft + 10) {
-      text(word, headRight, M_HEAD_Y, answering ? C.DIM : C.WARM, 'MR');
-    }
-  }
-
-  // The charge card, drawn before anything that sits on it -- which by now
-  // includes the cores' key.
-  panelCard(CARD_X, M_BY, CARD_W, M_BCH, C.BLUE);
-
-  const haveCpu = cpu && !cpu.error && cpu.cores && cpu.cores.length > 0;
-  const split = haveCpu && cpu.ecores > 0 && cpu.pcores > 0;
-  let keyLeft = CARD_X + CARD_W - CARD_PAD;
-
-  // The cores' key, on the right of the detail line: the cluster mix, each half
-  // in its own colour, which is what stops the bars below being an unlabelled
-  // row of colours. Up here because there is no room over them.
-  if (split) {
-    font(16);
-    const e = cpu.ecores + 'E', p = cpu.pcores + 'P';
-    let x = CARD_X + CARD_W - CARD_PAD - (tw(e) + tw('+') + tw(p));
-    keyLeft = x;
-    text(e, x, M_DETAIL_Y, C_ECORE, 'ML'); x += tw(e);
-    text('+', x, M_DETAIL_Y, C.DIM, 'ML'); x += tw('+');
-    text(p, x, M_DETAIL_Y, C_PCORE, 'ML');
-  }
-
-  if (!valid) {
-    // Only the top half is missing: the cores come from a different request and
-    // may well have answered, so the error takes the space the battery would
-    // have had and the columns below still draw.
-    font(16);
-    text(m && m.error ? m.error : 'loading...', W / 2, M_BAR_Y, C.ERR, 'MC');
-  } else {
-    const pct = m.bat_pct >= 0 ? m.bat_pct : -1;
-    const t = barRow(CARD_X, CARD_W, M_BAR_Y, 'BAT', C.BLUE,
-                     pct >= 0 ? pct + '%' : '', chargeColor(pct));
-
-    if (pct >= 0 && t.w > 0) {
-      let filled = Math.floor(t.w * pct / 100);
-      if (filled > t.w) filled = t.w;
-      if (filled < 2 && pct > 0) filled = 2;
-      // Flat rather than the usage page's ramp: there the gradient tracks a cost
-      // rising toward its limit, here it would just be decoration.
-      rect(t.x, M_BAR_Y - BAR_H / 2, filled, BAR_H, chargeColor(pct));
-    }
-
-    const left = spanText(m.bat_mins * 60);
-    const head = left ? left + ' left' : 'no estimate';
-    const upFor = spanText(m.uptime_s);
-
-    font(16);
-    // The uptime gives way to the cores' key when the two would meet, the way
-    // the seconds give way to the temperature on the clock.
-    const fits = upFor &&
-      CARD_X + CARD_PAD + tw(head) + 9 + 9 + tw('up ' + upFor) < keyLeft - 8;
-    detailLine(CARD_X + CARD_PAD, M_DETAIL_Y, head, fits ? 'up ' + upFor : '');
-  }
-
-  // The three cells that say how much of the machine is spoken for, each on its
-  // own card and the ramp running left to right across them. The figures stay
-  // on the severity ramp, which is where "is 91% a problem" is answered.
-  const GW = 100, G1 = CARD_X, G2 = 110, G3 = 216;
-  const GT = M_GRID_Y + 1;       // row() takes the top of the line box
-  const GI = GW - 2 * CARD_PAD;
-
-  panelCard(G1, M_GRID_Y, GW, M_GRID_H, C.TEAL);
-  panelCard(G2, M_GRID_Y, GW, M_GRID_H, C.VIOLET);
-  panelCard(G3, M_GRID_Y, GW, M_GRID_H, C.MAGENTA);
-
-  const cell = (x, label, v, hue) =>
-    row(x + CARD_PAD, GI, GT, label, v >= 0 ? v + '%' : '--',
-        v >= 0 ? severityColor(v) : C.DIM, hue);
-
-  cell(G1, 'Mem',  valid ? m.mem_used  : -1, C.TEAL);
-  cell(G2, 'Disk', valid ? m.disk_used : -1, C.VIOLET);
-  cell(G3, 'CPU',  haveCpu && cpu.avg >= 0 ? cpu.avg : -1, C.MAGENTA);
-
-  // --- the cores ---------------------------------------------------------------
-
-  if (!haveCpu) {
-    font(16);
-    text(cpu && cpu.error ? cpu.error : 'loading...',
-         W / 2, (M_CTOP + M_CBOT) / 2, C.ERR, 'MC');
-    return;
-  }
-
-  const MARGIN = 4, SPLIT = split ? 10 : 0, CH = M_CBOT - M_CTOP;
-  const n = cpu.cores.length;
-  const { bw, gap } = cpuBarLayout(n, W, MARGIN, SPLIT);
-
-  // The unlit part of each column carries the cluster colour too, at a level
-  // that stays behind the fill -- without it an idle Mac is a row of identical
-  // grey columns and the distinction disappears exactly when the gap between
-  // the groups is the only thing left to read.
-  const TRACK_E = shade(C_ECORE, 34), TRACK_P = shade(C_PCORE, 34);
-
-  const span = n * bw + (n - 1) * gap + SPLIT;
-  let x0 = (W - span) / 2;
-  if (x0 < MARGIN) x0 = MARGIN;
-
-  for (let i = 0; i < n; i++) {
-    const perf = split && i >= cpu.ecores;
-    const x = x0 + i * (bw + gap) + (perf ? SPLIT : 0);
-    if (x + bw > W - MARGIN) break;
-
-    let pct = cpu.cores[i];
-    if (!(pct >= 0)) pct = 0;
-    if (pct > 100) pct = 100;
-
-    const hue   = !split ? C.BLUE            : (perf ? C_PCORE : C_ECORE);
-    const track = !split ? shade(C.BLUE, 34) : (perf ? TRACK_P : TRACK_E);
-
-    rect(x, M_CTOP, bw, CH, track);
-
-    let filled = Math.floor(CH * pct / 100);
-    if (filled < 2 && pct > 0) filled = 2;
-    // Grown from the bottom, so a row of columns reads as level rather than as
-    // a set of separate bars that happen to share a baseline.
-    if (filled > 0) rect(x, M_CBOT - filled, bw, filled, hue);
-  }
-}
-
-// --- the pomodoro ---------------------------------------------------------------------
-//
-// The one section here that is not a view of something else, and the one whose
-// state is not the Mac's. It is held by serve.py rather than in this page: a
-// phone throttles a locked tab's timers and would come back minutes wrong, a
-// closed tab is a lost countdown, and a phone and a laptop on the same page
-// would otherwise each be counting their own afternoon.
-//
-// It is a second timer, not a second view of the panel's -- the panel's own
-// lives in its millis() and cannot be read over any wire. Worth saying plainly,
-// because everything else on this page is the same reading the panel has.
-
-const PHASE_HUE  = { focus: C.MAGENTA, short: C.TEAL, long: C.VIOLET };
-// Short, because the chip shares its line with a 168px countdown. "LONG" rather
-// than "LONG BREAK" for that and nothing else.
-const PHASE_CHIP = { focus: 'FOCUS', short: 'BREAK', long: 'LONG' };
-
-// Rounded up, so a phase says 25:00 for the whole of its first second and 0:00
-// only when it is actually over. A timer that opens at 24:59 looks broken.
-function pomoClock(seconds) {
-  const s = Math.max(0, Math.ceil(seconds));
-  return `${Math.floor(s / 60)}:${pad2(s % 60)}`;
-}
-
-// What is left now. The server sends what was left when it answered; between
-// polls the countdown is this page's own arithmetic, so it moves every second
-// rather than every two.
-function pomoLeft(p) {
-  if (!p) return 0;
-  if (!p.running) return p.left;
-  return Math.max(0, p.left - (performance.now() - state.baseAt) / 1000);
-}
-
-function drawPomo(p, now) {
-  const phase = (p && p.phase) || 'focus';
-  const hue = PHASE_HUE[phase];
-  const left = pomoLeft(p);
-  const running = !!(p && p.running);
-  // Recomputed here rather than trusted from the payload: `fresh` was true when
-  // the server answered, and a phase that has been running for a second since
-  // is not fresh any more.
-  const fresh = !!p && !running && left >= p.len;
-
-  font(16);
-  text('Pomodoro', 8, P_HEAD_Y, C.VIOLET, 'ML');
-
-  // The phase, in a chip at the other end of the heading rather than on the card
-  // below it: the card is 168px of countdown wide, and a lozenge beside that is
-  // a lozenge crowding it.
-  const tag = PHASE_CHIP[phase];
-  chip(W - 8 - (tw(tag) + 12), P_HEAD_Y, tag, hue);
-
-  panelCard(CARD_X, P_CY, CARD_W, P_CH, hue);
-
-  if (!p) {
-    font(16);
-    text('waiting for the timer', W / 2, P_CY + P_CH / 2, C.ERR, 'MC');
-    return;
-  }
-
-  // Which of the three states the clock is in, in the corner of the card the
-  // digits leave free. The word is the only unambiguous answer -- a countdown
-  // that has stopped looks exactly like one nobody has started yet -- and the
-  // colour carries it from further away than the word can be read from.
-  font(16);
-  const word = running ? 'running' : fresh ? 'ready' : 'paused';
-  text(word, CARD_X + CARD_W - CARD_PAD, P_CY + 14,
-       running ? C.OK : fresh ? C.DIM : C.WARM, 'MR');
-
-  // Full white while it runs, dim before it has been started, and blinking
-  // between the two while it is paused -- the flip clock's colon again, and for
-  // its reason: a figure that has stopped moving needs to say which of the two
-  // happened. The last minute goes warm, on the severity ramp.
-  const ink = running ? (left < 60 ? C.WARM : C.TEXT)
-            : fresh   ? C.DIM
-                      : ((new Date(now * 1000).getSeconds() & 1) ? C.DIM : C.TEXT);
-
-  font(64);
-  const clock = pomoClock(left);
-  const m = ctx.measureText(clock);
-  ctx.fillStyle = css(ink);
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillText(clock, W / 2,
-               P_CY + P_CH / 2 +
-               (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2);
-
-  // --- the set ------------------------------------------------------------------
-
-  panelCard(CARD_X, P_SY, CARD_W, P_SH, C.BLUE);
-
-  // The same chip, track and figure the usage gauges and the Mac's charge are
-  // made of, so the row lands where those rows land.
-  const t = barRow(CARD_X, CARD_W, P_SY + P_SH / 2, 'SET', C.BLUE,
-                   `${p.done} of ${POMO_SET}`, C.TEXT);
-
-  // Four cells rather than one fill, because what is being counted is four
-  // things and not a percentage. Each finished block takes one; the block
-  // running now fills its own as it goes, which is the only place here the
-  // minutes appear as a shape rather than as a figure.
-  if (t.w >= POMO_SET * 4) {
-    const gap = 4;
-    const cw = Math.floor((t.w - (POMO_SET - 1) * gap) / POMO_SET);
-    const y = P_SY + P_SH / 2 - BAR_H / 2;
-
-    for (let i = 0; i < POMO_SET; i++) {
-      const x = t.x + i * (cw + gap);
-      rect(x, y, cw, BAR_H, shade(C.BLUE, 34));
-
-      let fill = 0;
-      if (i < p.done) fill = cw;
-      else if (i === p.done && phase === 'focus' && !fresh) {
-        fill = Math.round(cw * (p.len - left) / p.len);
-      }
-      if (fill > 0) rect(x, y, Math.min(fill, cw), BAR_H, C.BLUE);
-    }
-  }
-}
-
-// What releasing the press now would do, in the panel's own words. Mid-press it
-// stops naming the hold and starts naming the stop below it, which is the only
-// reason a second stop is findable at all: nothing else could tell you that
-// going on holding buys something more.
-function pomoHint(p) {
-  if (press.on) {
-    const held = performance.now() - press.at;
-    if (held >= HELD_MS) return 'set cleared';
-    if (held >= HOLD_MS) return 'keep holding  clear set';
-  }
-  if (!p) return '';
-  const left = pomoLeft(p);
-  const fresh = !p.running && left >= p.len;
-  return p.running ? 'tap  pause, hold  reset'
-       : fresh     ? 'tap  start, hold  skip'
-                   : 'tap  resume, hold  reset';
-}
-
-// --- the chrome ---------------------------------------------------------------------
-
-// It blinks, in the red the rest of the panel keeps for things that are wrong.
-// A sleeping Mac is not wrong -- it is the ordinary state of that machine for
-// two thirds of the day -- so this is the one place the severity ramp is spent
-// on something that is merely worth being certain of.
-const SLEEP_BLINK_MS = 500;
-const blinkOn = () => Math.floor(performance.now() / SLEEP_BLINK_MS) % 2 === 0;
-
-// "sleep" is the only reason for a dark Mac this will say out loud. The panel
-// refuses the other two -- a machine awake and untended, and a host that simply
-// stopped answering -- because neither is the machine having gone to bed.
-function restLabel(m, macAge) {
-  if (!m || m.error) return null;
-  const answering = macAge >= 0 && macAge <= 30;
-  const screensOn = !(m.display === 'asleep' || m.display === 'none');
-  const tended = !(m.idle >= 0) || m.idle <= 600;
-  const awake = answering && screensOn && tended;
-  if (awake) return null;
-  return screensOn ? null : 'sleep';
-}
-
-function drawStatusBar(now, online, rest) {
-  rect(0, 0, W, BAR_TOP, C.BAR);
-  font(16);
-
-  const link = online ? 'HTTP' : 'OFFLINE';
-  text(link, 6, BAR_TOP / 2, online ? C.OK : C.ERR, 'ML');
-
-  // Beside the link rather than anywhere else on the bar, because the two are
-  // read together: the link says whether the page can still see the Mac, and
-  // this says what it sees.
-  if (rest && blinkOn()) {
-    text(rest, 6 + tw(link) + 7, BAR_TOP / 2, C.ERR, 'ML');
-  }
-
-  const d = new Date(now * 1000);
-  text(`${WDAY[d.getDay()]} ${pad2(d.getDate())} ${MON[d.getMonth()]}`,
-       W - 6, BAR_TOP / 2, C.TEXT, 'MR');
-}
-
-// The right-hand hint is the one naming what the thumb already on the glass
-// will do, so it is the one that keeps its room. The left gives way when the
-// two would meet -- the same trade the Mac page makes between the uptime and
-// the cores' key, and for the same reason: a line that overlaps says less than
-// a line that drops a field.
-function drawHintBar(left, right) {
-  const cy = BODY_BOT + BAR_BOTTOM / 2;
-  rect(0, BODY_BOT, W, BAR_BOTTOM, C.BAR);
-  font(16);
-  text(right, W - 6, cy, C.DIM, 'MR');
-  if (6 + tw(left) + 12 < W - 6 - tw(right)) text(left, 6, cy, C.DIM, 'ML');
-}
-
-// --- what is on screen ----------------------------------------------------------------
+// --- what is on screen ------------------------------------------------------------
 
 const state = {
-  data: null,        // the last answer that arrived
+  data: null,
   online: true,
   busy: false,
-  baseNow: 0,        // the Mac's clock at that answer
-  baseAt: 0,         // performance.now() when it arrived
+  baseNow: 0,     // the Mac's clock at the last answer
+  baseAt: 0,      // performance.now() when it arrived
 };
 
-// A press on the pomodoro section. The panel finds its third and fourth actions
-// by how long a button is held, and so does this -- one gesture, three depths,
-// and the hint bar naming whichever one letting go now would take.
-const press = { on: false, at: 0 };
-
-// The Mac's clock rather than the phone's. Every reset time in the payload is
+// The Mac's clock rather than the phone's: every reset time in the payload is
 // an epoch the Mac worked out, and a phone whose clock has drifted would push
 // every countdown on the page by the drift.
 function serverNow() {
@@ -937,35 +502,232 @@ function serverNow() {
   return Math.floor(state.baseNow + (performance.now() - state.baseAt) / 1000);
 }
 
-// How stale a reading is now, not how stale it was when it arrived: a failed
+const sinceFetch = () => (performance.now() - state.baseAt) / 1000;
+
+// How stale a reading is now, not how stale it was when it arrived -- a failed
 // poll would otherwise leave the age frozen and a dead link read as fresh.
 function ageNow(reading) {
   if (!reading || reading.error || !(reading.age >= 0)) return -1;
-  return reading.age + Math.floor((performance.now() - state.baseAt) / 1000);
+  return Math.floor(reading.age + sinceFetch());
 }
+
+// --- the sections -------------------------------------------------------------------
+
+function drawClock(now, weather) {
+  const d = new Date(now * 1000);
+  $('clock').textContent = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  $('date').textContent = `${WDAY[d.getDay()]} ${pad2(d.getDate())} ${MON[d.getMonth()]}`;
+
+  if (!weather || weather.error || weather.temp === undefined) {
+    $('weather').innerHTML =
+      `<span class="miss">${esc((weather && weather.error) || 'loading')}</span>`;
+    return;
+  }
+  // Rounded to the degree: the tenth is not a figure anybody reads at a glance.
+  $('weather').innerHTML =
+    `<span><b style="color:${tempCol(weather.temp)}">${Math.round(weather.temp)}&deg;</b></span>` +
+    `<span>feels like <b style="color:${tempCol(weather.feels)}">${Math.round(weather.feels)}&deg;</b></span>` +
+    (weather.place ? `<span>${esc(weather.place)}</span>` : '');
+}
+
+function drawUsage(u, now) {
+  const age = ageNow(u);
+  const note = $('usage-age');
+
+  const valid = u && !u.error && (u.h5 >= 0 || u.d7 >= 0);
+  if (!valid) {
+    note.textContent = '';
+    $('usage-body').innerHTML =
+      `<div class="miss">${esc((u && u.error) || 'waiting for a reading')}</div>`;
+    return;
+  }
+
+  // How old the reading is matters as much as the reading: the files behind it
+  // only move when something else writes them. One the host went and asked for
+  // says "live" instead of counting the seconds since.
+  note.textContent = u.live ? 'live'
+                   : age < 0 ? ''
+                   : age < 90 ? `${age}s ago`
+                              : `${Math.floor(age / 60)}m ago`;
+  note.className = 'note' + (age > 900 ? ' stale' : '');
+
+  const window_ = (tag, tint, pct, reset) => {
+    if (!(pct >= 0)) {
+      return gauge({ tag, tint, pct: 0, figure: { text: '--', color: 'var(--faint)' },
+                     sub: 'waiting for a reading' });
+    }
+    const left = spanText(reset - now);
+    const when = resetClock(reset, now);
+    return gauge({
+      tag, tint, pct,
+      figure: { text: pct + '%', color: severity(pct) },
+      sub: when ? `resets ${when}` + (left ? sep + `in ${left}` : '') : '',
+    });
+  };
+
+  $('usage-body').innerHTML =
+    window_('5H', 'var(--teal)',   u.h5, u.h5_reset) +
+    window_('7D', 'var(--violet)', u.d7, u.d7_reset);
+}
+
+// How the panel words the display field. "asleep" is the reason for the
+// translation: the server means the screens are off while the machine is up,
+// and "asleep" printed beside "MacBook" says the opposite of what it means.
+function screenWord(display, answering) {
+  if (!answering) return 'not answering';
+  return { external: 'external', builtin: 'built-in',
+           asleep: 'screen off', none: 'no screen' }[display] || '';
+}
+
+function drawMac(m, cpu) {
+  const age = ageNow(m);
+  const valid = m && !m.error;
+  const answering = valid && age >= 0 && age <= 30;
+
+  const note = $('mac-note');
+  const bits = [];
+  if (valid) {
+    const word = screenWord(m.display, answering);
+    if (word) bits.push(word);
+    if (m.bat_state) bits.push(m.bat_state);
+    // Shown only once it is old enough to mislead: labelling a fresh number
+    // "0s ago" every second is noise.
+    if (age > 90) bits.push(`${Math.floor(age / 60)}m ago`);
+  }
+  note.textContent = bits.join(' · ');
+  note.className = 'note' + (valid && (!answering || age > 90) ? ' stale' : '');
+
+  if (!valid) {
+    $('mac-body').innerHTML =
+      `<div class="miss">${esc((m && m.error) || 'loading')}</div>`;
+    return;
+  }
+
+  const left = spanText(m.bat_mins * 60);
+  const up = spanText(m.uptime_s);
+  const bat = gauge({
+    tag: 'BAT', tint: 'var(--blue)',
+    pct: m.bat_pct >= 0 ? m.bat_pct : 0,
+    fill: charge(m.bat_pct),
+    figure: { text: m.bat_pct >= 0 ? m.bat_pct + '%' : '--',
+              color: m.bat_pct >= 0 ? charge(m.bat_pct) : 'var(--faint)' },
+    sub: (left ? `${left} left` : 'no estimate') + (up ? sep + `up ${up}` : ''),
+  });
+
+  const haveCpu = cpu && !cpu.error && cpu.cores && cpu.cores.length > 0;
+  const cell = (k, v, col) =>
+    `<div class="cell"><span class="k">${k}</span>` +
+    `<span class="v" style="color:${col}">${v}</span></div>`;
+
+  const cells = '<div class="cells">' +
+    cell('Mem',  m.mem_used  >= 0 ? m.mem_used + '%'  : '--',
+         m.mem_used  >= 0 ? severity(m.mem_used)  : 'var(--faint)') +
+    cell('Disk', m.disk_used >= 0 ? m.disk_used + '%' : '--',
+         m.disk_used >= 0 ? severity(m.disk_used) : 'var(--faint)') +
+    cell('CPU',  haveCpu && cpu.avg >= 0 ? cpu.avg + '%' : '--',
+         haveCpu && cpu.avg >= 0 ? severity(cpu.avg) : 'var(--faint)') +
+    '</div>';
+
+  // One column per core, efficiency cores first, with a gap where the clusters
+  // meet. The unlit part carries the cluster colour too, at a level that stays
+  // behind the fill -- without it an idle Mac is a row of identical grey
+  // columns and the distinction disappears exactly when the gap between the
+  // groups is the only thing left to read.
+  let cores = '';
+  if (haveCpu) {
+    const split = cpu.ecores > 0 && cpu.pcores > 0;
+    cores = '<div class="cores">' + cpu.cores.map((v, i) => {
+      const perf = split && i >= cpu.ecores;
+      const c = !split ? 'var(--blue)' : perf ? 'var(--pink)' : 'var(--teal)';
+      const gap = (split && i === cpu.ecores) ? '<i class="split"></i>' : '';
+      const f = Math.max(0, Math.min(100, v)) / 100;
+      return `${gap}<i style="--c:${c};--v:${f.toFixed(3)}"></i>`;
+    }).join('') + '</div>';
+  }
+
+  $('mac-body').innerHTML = `<div class="macrow">${bat}${cells}${cores}</div>`;
+}
+
+const PHASE_TINT = { focus: 'var(--pink)', short: 'var(--teal)', long: 'var(--violet)' };
+const PHASE_WORD = { focus: 'Focus', short: 'Break', long: 'Long break' };
+
+// What is left now. The server sends what was left when it answered; between
+// polls the countdown is this page's own arithmetic, so it moves every second
+// rather than every two.
+function pomoLeft(p) {
+  if (!p) return 0;
+  return p.running ? Math.max(0, p.left - sinceFetch()) : p.left;
+}
+
+function drawPomo(p) {
+  if (!p) {
+    $('pomo-state').textContent = '';
+    $('pomo-clock').textContent = '--:--';
+    return;
+  }
+
+  const left = pomoLeft(p);
+  // Recomputed rather than trusted from the payload: `fresh` was true when the
+  // server answered, and a phase running for a second since is not fresh.
+  const fresh = !p.running && left >= p.len;
+  const secs = Math.max(0, Math.ceil(left));
+
+  // Rounded up, so a phase says 25:00 for the whole of its first second and
+  // 0:00 only when it is actually over. A timer that opens at 24:59 looks
+  // broken.
+  $('pomo-clock').textContent = `${Math.floor(secs / 60)}:${pad2(secs % 60)}`;
+  // The last minute goes amber, which is the only thing on this card the
+  // severity ramp is spent on.
+  $('pomo-clock').style.color =
+    p.running && left < 60 ? 'var(--warn)' : 'var(--text)';
+
+  const word = p.running ? 'running' : fresh ? 'ready' : 'paused';
+  const st = $('pomo-state');
+  st.textContent = `${PHASE_WORD[p.phase]} · ${word}`;
+  st.className = 'note state ' + word;
+
+  $('pomo-go').textContent = p.running ? 'Pause' : fresh ? 'Start' : 'Resume';
+  // The same button either way, because it is the same question -- leave this
+  // phase and take the next one. A phase not yet started has nothing to put
+  // back, so leaving it is a skip; one part-way through has, so it is a reset.
+  $('pomo-hold').textContent = fresh ? 'Skip' : 'Reset';
+  $('pomo-clear').disabled = p.done === 0 && fresh && p.phase === 'focus';
+
+  // A cell each, because what is being counted is four things and not a
+  // percentage. The block running now fills its own as it goes.
+  let cells = '';
+  for (let i = 0; i < p.set; i++) {
+    let f = 0;
+    if (i < p.done) f = 1;
+    else if (i === p.done && p.phase === 'focus' && !fresh) f = (p.len - left) / p.len;
+    cells += `<i><b style="--f:${Math.max(0, Math.min(1, f)).toFixed(3)}"></b></i>`;
+  }
+  $('pomo-set').innerHTML = cells;
+}
+
+// --- drawing the lot ------------------------------------------------------------------
 
 function render() {
   const now = serverNow();
   const d = state.data || {};
 
-  rect(0, 0, W, H, C.BG);
+  $('bar').className = 'bar' + (state.online ? '' : ' off');
+  $('link').textContent = state.online ? 'connected' : 'offline';
+  $('stamp').textContent = state.busy ? 'refreshing'
+                         : state.baseAt ? `updated ${Math.floor(sinceFetch())}s ago`
+                                        : '';
 
-  drawStatusBar(now, state.online, restLabel(d.mac, ageNow(d.mac)));
-  drawFlip(now);
-  drawWeather(d.weather);
-  drawUsage(d.usage, now, ageNow(d.usage));
-  drawMac(d.mac, d.cpu, ageNow(d.mac));
-  drawPomo(d.pomo, now);
-  drawHintBar(state.busy ? 'refreshing' : 'tap above  refresh', pomoHint(d.pomo));
+  drawClock(now, d.weather);
+  drawUsage(d.usage, now);
+  drawMac(d.mac, d.cpu);
+  drawPomo(d.pomo);
 
-  // A phase that has run out is settled by the server, and the page is what
-  // notices: it holds the only clock ticking between polls. Asking straight
-  // away rather than waiting out the poll is the difference between a break
-  // that starts when the work ended and one that starts a second or two later.
+  // A phase that has run out is settled by the server, and this is what
+  // notices: it holds the only clock ticking between polls.
   if (d.pomo && d.pomo.running && pomoLeft(d.pomo) <= 0) poll();
 }
 
-// --- the readings -----------------------------------------------------------------------
+// --- the readings ------------------------------------------------------------------------
 
 // The server holds each reading for as long as the panel would, so a poll this
 // often costs one loopback request at most and usually none.
@@ -983,82 +745,14 @@ async function poll() {
     state.baseAt = performance.now();
     state.online = true;
   } catch (e) {
-    // Nothing answered at all: the Mac slept, the phone moved off the network,
-    // or the window this server was started in got closed. Whatever is already
-    // up stays up and goes on ageing, which is the honest thing for it to do.
+    // Nothing answered: the Mac slept, the phone moved off the network, or the
+    // window this server was started in got closed. Whatever is already up
+    // stays up and goes on ageing, which is the honest thing for it to do.
     state.online = false;
   }
 
   state.busy = false;
   render();
-}
-
-// --- fitting it to the phone --------------------------------------------------------------
-
-function fit() {
-  const s = Math.min(innerWidth / W, innerHeight / H);
-  const dpr = devicePixelRatio || 1;
-
-  cv.style.width  = (W * s) + 'px';
-  cv.style.height = (H * s) + 'px';
-  cv.width  = Math.round(W * s * dpr);
-  cv.height = Math.round(H * s * dpr);
-
-  // Resizing the backing store resets the context, so the transform goes on
-  // after rather than before.
-  ctx.setTransform(s * dpr, 0, 0, s * dpr, 0, 0);
-  PXW = 1 / (s * dpr);
-  render();
-}
-
-// Keep the screen lit while the page is the thing in front of you. It is a
-// panel; a panel that blanks after thirty seconds is a window you keep waking.
-let wakeLock = null;
-async function holdScreen() {
-  try {
-    if ('wakeLock' in navigator && document.visibilityState === 'visible') {
-      wakeLock = await navigator.wakeLock.request('screen');
-    }
-  } catch (e) { /* not offered, or refused: nothing to fall back to */ }
-}
-
-// Half a second, because two things on the page move at that rate: the sleep
-// word blinks at 2 Hz and the colon at 1. A fold borrows a faster frame for the
-// third of a second it is in flight and gives it back, which is what the panel
-// does and for the same reason -- 40ms frames all the time would be a phone
-// redrawing a still picture sixty times a minute for nothing.
-// The faster frame, borrowed for a fold and for the length of a press, and given
-// straight back. 40ms rather than requestAnimationFrame's sixty a second, which
-// is the rate the panel folds a card at -- a fold is four cards and a press is a
-// hint bar, and neither is worth waking a phone's compositor sixty times a
-// second to redraw a page that is otherwise still.
-const FRAME_MS = 40;
-let fast = 0;
-
-function frame() {
-  render();
-  fast = (flipping() || press.on) ? setTimeout(frame, FRAME_MS) : 0;
-}
-
-// One at a time: a press starting mid-fold would otherwise leave two loops
-// running and the page redrawing twice as often for as long as they overlap.
-function faster() {
-  if (!fast) frame();
-}
-
-function tick() {
-  render();
-  if (flipping() || press.on) faster();
-}
-
-addEventListener('resize', fit);
-addEventListener('orientationchange', fit);
-
-// Panel units from a pointer event, so the hit test is written in the same
-// coordinates everything is drawn in.
-function unitsY(ev) {
-  const r = cv.getBoundingClientRect();
-  return (ev.clientY - r.top) * H / r.height;
 }
 
 async function pomoDo(action) {
@@ -1080,34 +774,21 @@ async function pomoDo(action) {
   render();
 }
 
-cv.addEventListener('pointerdown', ev => {
-  if (unitsY(ev) < P_TOP) return;          // the rest of the page is a refresh
-  press.on = true;
-  press.at = performance.now();
-  // Capture so the release still lands here if the thumb drifts off the
-  // section. Guarded: a browser that will not give it up is a browser where the
-  // press should still work, not one where it throws on the way down.
-  try { cv.setPointerCapture(ev.pointerId); } catch (e) {}
-  render();
-  faster();                                // so the hint bar keeps up with the hold
-});
+$('refresh').addEventListener('click', poll);
+$('pomo-go').addEventListener('click', () => pomoDo('start'));
+$('pomo-hold').addEventListener('click', () => pomoDo('hold'));
+$('pomo-clear').addEventListener('click', () => pomoDo('clear'));
 
-// Three depths on one gesture, at the panel's own two stops. Deepest first:
-// clearing the set is the one that loses more than a phase.
-cv.addEventListener('pointerup', ev => {
-  if (!press.on) { poll(); return; }
-  const held = performance.now() - press.at;
-  press.on = false;
-  pomoDo(held >= HELD_MS ? 'clear' : held >= HOLD_MS ? 'hold' : 'start');
-});
-
-// A press the browser takes away -- a system gesture, a call arriving -- does
-// nothing at all. Only cancel: pointerleave fires under an active capture in
-// some browsers, and dropping a hold because a thumb drifted over the edge of
-// the canvas would lose the one gesture that has to survive being held.
-cv.addEventListener('pointercancel', () => {
-  if (press.on) { press.on = false; render(); }
-});
+// Keep the screen lit while the page is the thing in front of you. It is a
+// panel; a panel that blanks after thirty seconds is a window you keep waking.
+let wakeLock = null;
+async function holdScreen() {
+  try {
+    if ('wakeLock' in navigator && document.visibilityState === 'visible') {
+      wakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch (e) { /* not offered, or refused: nothing to fall back to */ }
+}
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
@@ -1117,21 +798,11 @@ document.addEventListener('visibilitychange', () => {
   poll();
 });
 
-// Metrics before pixels: every row here is laid out from a measured string, so
-// drawing before the face has loaded lays the page out for the fallback and
-// then leaves it that way until something else redraws it.
-Promise.all([
-  document.fonts.load('16px PanelUI'),
-  document.fonts.load('24px PanelUI'),
-  document.fonts.load('64px PanelUI'),
-  document.fonts.load('88px PanelUI'),
-]).catch(() => {}).then(() => {
-  fit();
-  poll();
-  setInterval(poll, POLL_MS);
-  setInterval(tick, SLEEP_BLINK_MS);
-  holdScreen();
-});
+render();
+poll();
+setInterval(poll, POLL_MS);
+setInterval(render, 1000);   // the clock, the countdown and the ages
+holdScreen();
 </script>
 </body>
 </html>
