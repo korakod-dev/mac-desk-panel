@@ -452,6 +452,17 @@ figures, which is the other half of what looked untidy — a column of
 percentages lines up whatever digits it happens to be showing, and a countdown
 stops shuffling sideways once a second.
 
+The clock is a split-flap board again, which is what the panel's is and what
+those four colours were chosen for in the first place — but turned rather than
+drawn. Each card is two halves of one digit, and a fold is the old top rotating
+down onto the seam and the new bottom swinging up out of it, darkening as it
+turns away from the light and coming back as it faces you. The firmware fakes
+that with clipped viewports because it has no way to rotate anything; a browser
+has, and it does not need to be told where a glyph sits to do it — each half is
+a window onto a digit set at the full height of the card, so `line-height`
+centres it and the seam falls where it falls. The countdown on the pomodoro
+stays plain figures: a timer flapping a card every second is not a clock.
+
 Laid out for a phone on its side, which is the shape the readings want:
 three columns — the clock and the weather, the two Claude Code windows, the
 pomodoro — with the Mac along the foot, where the row of cores has the width it

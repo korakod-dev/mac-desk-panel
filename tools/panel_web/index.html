@@ -46,11 +46,11 @@
     --dim:     #8c999e;
     --faint:   #5c686d;
 
-    /* which reading this is */
-    --teal:    #19bfae;
-    --blue:    #4b8ef7;
-    --violet:  #9b7bf5;
-    --pink:    #f0559b;
+    /* which reading this is, and the darker cast each one's lower half takes */
+    --teal:    #19bfae;  --teal-d:   #0f8478;
+    --blue:    #4b8ef7;  --blue-d:   #3363ad;
+    --violet:  #9b7bf5;  --violet-d: #6d56ac;
+    --pink:    #f0559b;  --pink-d:   #a93c6e;
 
     /* how that reading is doing */
     --ok:      #35d07f;
@@ -206,6 +206,127 @@
     text-align: center;
   }
 
+  /* --- the flip clock ---------------------------------------------------
+     A split-flap board, which is what the panel's clock is and what its four
+     colours were chosen for in the first place. Done with a rotation about the
+     seam rather than the panel's clipped viewports, because a browser will do
+     the rotation and the firmware could not.
+
+     Nothing here positions text: each half is a window onto a digit set at the
+     full height of the card, so the glyph is centred by line-height in both
+     and the seam falls where it falls. That is the whole lesson of the canvas
+     version -- the moment something works out where a baseline goes, it works
+     it out differently in the next browser. */
+
+  .flipclock {
+    --fh: clamp(52px, 19vw, 104px);   /* upright: the card is the page */
+    --fw: calc(var(--fh) * 0.72);
+    --fr: calc(var(--fh) * 0.09);
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: calc(var(--fh) * 0.07);
+    margin: auto 0;
+    perspective: 900px;
+  }
+
+  /* Sideways the clock has a third of the width and a fifth of the height it
+     had upright, so it is sized off both and takes whichever runs out first.
+     After the rule it overrides, not before: same specificity, later wins. */
+  @media (orientation: landscape) {
+    .flipclock { --fh: min(30vh, 7.6vw, 104px); }
+  }
+
+  .flip {
+    position: relative;
+    width: var(--fw);
+    height: var(--fh);
+    border-radius: var(--fr);
+    background: #0b0e10;          /* the seam, showing between the halves */
+    transform-style: preserve-3d;
+    flex: none;
+  }
+
+  .flip .half,
+  .flip .leaf {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    height: calc(50% - 1px);
+    overflow: hidden;
+    backface-visibility: hidden;
+  }
+
+  .flip .t, .flip .front { top: 0; border-radius: var(--fr) var(--fr) 0 0;
+                           background: var(--hue); }
+  .flip .b, .flip .back  { top: calc(50% + 1px); border-radius: 0 0 var(--fr) var(--fr);
+                           background: var(--hue-d); }
+
+  /* A digit set at the height of the whole card, seen through a half of it.
+     Both halves hold the same box, so the two fragments meet at the seam. */
+  .flip span {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    height: var(--fh);
+    line-height: var(--fh);
+    text-align: center;
+    font-size: calc(var(--fh) * 0.7);
+    font-weight: 300;
+    color: #fff;
+  }
+  .flip .t span, .flip .front span { top: 0; }
+  .flip .b span, .flip .back  span { bottom: 0; }
+
+  /* The leaf in flight: the old top falling onto the seam, then the new bottom
+     swinging up out of it. Half the fold each, which is what makes it read as
+     one card turning over rather than two things moving. */
+  .flip .front { transform-origin: bottom; animation: fall 180ms ease-in forwards; }
+  .flip .back  { transform-origin: top; transform: rotateX(90deg);
+                 animation: rise 180ms 180ms ease-out forwards; }
+
+  @keyframes fall { to { transform: rotateX(-90deg); } }
+  @keyframes rise { to { transform: rotateX(0deg); } }
+
+  /* It darkens as it turns away from the light and comes back as it faces you.
+     At this size that is what a fold looks like. */
+  .flip .leaf::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: #000;
+    opacity: 0;
+  }
+  .flip .front::after { animation: darken 180ms ease-in forwards; }
+  .flip .back::after  { opacity: .5; animation: lighten 180ms 180ms ease-out forwards; }
+
+  @keyframes darken  { to { opacity: .5; } }
+  @keyframes lighten { to { opacity: 0; } }
+
+  /* Asked not to animate, it simply changes. The clock is still a clock. */
+  @media (prefers-reduced-motion: reduce) {
+    .flip .leaf { display: none; }
+  }
+
+  .colon {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: calc(var(--fh) * 0.18);
+    padding: 0 calc(var(--fh) * 0.06);
+    flex: none;
+  }
+  .colon i {
+    width: calc(var(--fh) * 0.09);
+    height: calc(var(--fh) * 0.09);
+    border-radius: 50%;
+    background: var(--text);
+  }
+  /* Soft on the odd second and back on the even: the one thing on this card
+     that answers "is this still running" between minutes. */
+  .colon.tick i { background: var(--faint); }
+
   .under {
     display: flex;
     justify-content: center;
@@ -331,16 +452,33 @@
     min-width: 0;
   }
   .cores i {
+    position: relative;
     flex: 1;
     min-width: 0;
     height: 100%;
     border-radius: 3px;
-    background: linear-gradient(
-      to top,
-      var(--c) calc(var(--v, 0) * 100%),
-      color-mix(in srgb, var(--c) 22%, transparent) calc(var(--v, 0) * 100%));
+    overflow: hidden;
+    background: #0d1113;
+  }
+  /* The unlit part carries the cluster colour too, at a level that stays
+     behind the fill -- without it an idle Mac is a row of identical grey
+     columns, and the distinction disappears exactly when the gap between the
+     groups is the only thing left to read. */
+  .cores i::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: var(--c);
+    opacity: 0.22;
+  }
+  .cores i b {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: calc(var(--v, 0) * 100%);
+    background: var(--c);
   }
   .cores .split { flex: 0 0 10px; background: none; }
+  .cores .split::before { display: none; }
 
   /* --- the pomodoro -------------------------------------------------------- */
 
@@ -400,7 +538,7 @@
 <main>
   <section class="card clock">
     <div class="head">Time<span class="note" id="date"></span></div>
-    <div class="display" id="clock">--:--</div>
+    <div class="flipclock" id="flipclock"></div>
     <div class="under" id="weather"></div>
   </section>
 
@@ -513,9 +651,95 @@ function ageNow(reading) {
 
 // --- the sections -------------------------------------------------------------------
 
+// --- the flip clock ---------------------------------------------------------------
+//
+// Four cards in the panel's four hues, left to right, which is where those
+// colours came from: a split-flap board needs its cards told apart, and a 4 is
+// not worse than a 3.
+
+const FLIP_HUES = [
+  ['var(--teal)',   'var(--teal-d)'],
+  ['var(--blue)',   'var(--blue-d)'],
+  ['var(--violet)', 'var(--violet-d)'],
+  ['var(--pink)',   'var(--pink-d)'],
+];
+const FOLD_MS = 360;
+
+const cards = [];
+let colonEl = null;
+
+function buildClock() {
+  const host = $('flipclock');
+  host.innerHTML = '';
+  for (let i = 0; i < 4; i++) {
+    if (i === 2) {
+      colonEl = document.createElement('div');
+      colonEl.className = 'colon';
+      colonEl.innerHTML = '<i></i><i></i>';
+      host.appendChild(colonEl);
+    }
+    const el = document.createElement('div');
+    el.className = 'flip';
+    el.style.setProperty('--hue', FLIP_HUES[i][0]);
+    el.style.setProperty('--hue-d', FLIP_HUES[i][1]);
+    el.innerHTML = '<div class="half t"><span></span></div>' +
+                   '<div class="half b"><span></span></div>';
+    host.appendChild(el);
+    cards.push({ el, shown: null, timer: 0 });
+  }
+}
+
+// What a card actually does when its digit changes: the new digit goes into the
+// upper half straight away and is hidden by the old one's leaf, which falls off
+// it onto the seam; the lower half keeps the old digit until the leaf's other
+// face swings up and covers it. Then both halves are the new digit and the leaf
+// is thrown away.
+function setDigit(card, d, animate) {
+  if (card.shown === d) return;
+  const was = card.shown;
+  card.shown = d;
+
+  const top = card.el.querySelector('.t span');
+  const bot = card.el.querySelector('.b span');
+
+  if (!animate || was === null) {
+    top.textContent = bot.textContent = d;
+    return;
+  }
+
+  // A card still mid-fold when the next one starts -- a phone waking to find
+  // the clock several minutes on -- settles where it was going before it is
+  // asked to go anywhere else.
+  if (card.timer) {
+    clearTimeout(card.timer);
+    card.el.querySelectorAll('.leaf').forEach(n => n.remove());
+    bot.textContent = top.textContent;
+  }
+
+  top.textContent = d;                 // revealed as the leaf comes off it
+
+  const leaf = document.createElement('div');
+  leaf.className = 'leaf front';
+  leaf.innerHTML = `<span>${was}</span>`;
+  const back = document.createElement('div');
+  back.className = 'leaf back';
+  back.innerHTML = `<span>${d}</span>`;
+  card.el.append(leaf, back);
+
+  card.timer = setTimeout(() => {
+    card.timer = 0;
+    bot.textContent = d;               // swapped under the leaf, then uncovered
+    leaf.remove();
+    back.remove();
+  }, FOLD_MS);
+}
+
 function drawClock(now, weather) {
   const d = new Date(now * 1000);
-  $('clock').textContent = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const face = pad2(d.getHours()) + pad2(d.getMinutes());
+  for (let i = 0; i < 4; i++) setDigit(cards[i], face[i], true);
+  if (colonEl) colonEl.className = 'colon' + (d.getSeconds() & 1 ? ' tick' : '');
+
   $('date').textContent = `${WDAY[d.getDay()]} ${pad2(d.getDate())} ${MON[d.getMonth()]}`;
 
   if (!weather || weather.error || weather.temp === undefined) {
@@ -641,7 +865,7 @@ function drawMac(m, cpu) {
       const c = !split ? 'var(--blue)' : perf ? 'var(--pink)' : 'var(--teal)';
       const gap = (split && i === cpu.ecores) ? '<i class="split"></i>' : '';
       const f = Math.max(0, Math.min(100, v)) / 100;
-      return `${gap}<i style="--c:${c};--v:${f.toFixed(3)}"></i>`;
+      return `${gap}<i style="--c:${c}"><b style="--v:${f.toFixed(3)}"></b></i>`;
     }).join('') + '</div>';
   }
 
@@ -798,6 +1022,7 @@ document.addEventListener('visibilitychange', () => {
   poll();
 });
 
+buildClock();
 render();
 poll();
 setInterval(poll, POLL_MS);
