@@ -797,6 +797,23 @@ within the last twelve seconds, which is as close to "awake" as the panel can
 get from this side of the cable. The reverse does not hold: `WiFi` is equally
 what an unplugged cable or a stopped bridge looks like.
 
+Beside that word, and only once the panel has stopped believing anybody is at
+the Mac, is **`sleep`**. It is the one state here the panel will name out loud,
+and it is read off the screens rather than off the silence: the last thing the
+Mac said about its displays, which a failed fetch leaves standing. That is what
+carries it through the machine going all the way under — the screens go dark and
+the Mac says so, and the host goes quiet some minutes later with that reading
+still the most recent one. A sleeping Mac, seen from the desk, is a dark one
+that then went away, in that order.
+
+The two states it refuses are the point of having it. A machine left awake with
+nobody touching it for ten minutes dims the panel too, and there is nothing
+behind calling that sleep. A host that goes quiet with its screens last known
+*on* is a bridge that died, a server that was restarted, or the sixty seconds an
+upload holds the port — the Mac never said it was going anywhere, so neither
+does the panel. Both show no word at all, which makes the absence worth reading
+too: dim with nothing beside the link is the Mac awake with nobody at it.
+
 The **screen word** on the Mac page is the second — `external`, `built-in`,
 `screen off`. It comes from CoreGraphics rather than a shelled-out tool, which
 is what makes it cheap enough to sample every five seconds; the reading it

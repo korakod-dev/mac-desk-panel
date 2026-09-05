@@ -605,6 +605,39 @@ static bool macAwake() {
   return macAnswering() && macScreensOn() && macTended();
 }
 
+// The word the status bar puts beside the link, and nullptr when there is
+// nothing to say. The backlight already answers "is anybody at the Mac"; what
+// it cannot answer is *why* it dropped, and the reasons behind it are not the
+// same fact. Only one of them is the machine having gone to sleep, and it is
+// the only one this will say out loud.
+//
+// The test is the screens, and it is the last thing the Mac said about them
+// rather than a fresh reading — a failed fetch leaves the field alone, so it
+// keeps holding what the machine reported before it stopped answering. That is
+// what makes the word survive the machine going all the way under: the screens
+// go dark first and the Mac says so, and then the whole host goes quiet a while
+// later with that reading still standing. A sleeping Mac is a dark one that
+// then went away, in that order.
+//
+// It also refuses the two things that are not sleep, which is the whole point
+// of having a word for it:
+//
+//   untended   awake, screens on, nobody having touched it for ten minutes.
+//              The panel dims for this too, and calling it sleep would be an
+//              assertion with no reading behind it.
+//   silence    the host stopped answering with its screens last known on — a
+//              bridge that died, a server that was restarted, the sixty seconds
+//              an upload holds the port. The Mac never said it was going
+//              anywhere, so neither does this.
+//
+// Absence carries the rest: dim with no word is the Mac awake and untended, and
+// a link name gone red is the panel having lost the machine rather than the
+// machine having gone to bed.
+static const char *macRestLabel() {
+  if (macAwake()) return nullptr;
+  return macScreensOn() ? nullptr : "sleep";
+}
+
 static bool fetchMac() {
   if (!net::online()) {
     mac.error = "not connected";
@@ -1510,6 +1543,16 @@ static void drawStatusBar(const struct tm *now, bool timeValid) {
   // bridge is answering, "WiFi" when the radio is carrying it instead.
   fb.setTextColor(net::online() ? C_OK : C_ERR, C_BAR);
   fb.drawString(net::viaName(), 6, BAR_TOP / 2);
+
+  // Beside the link rather than anywhere else on the bar, because the two are
+  // read together: the link says whether the panel can still see the Mac, and
+  // this says what it sees. Dim, at the weight of the hint bar — it is a
+  // standing fact about the room, not a warning, and it should be findable
+  // without being the first thing the eye lands on.
+  if (const char *why = macRestLabel()) {
+    fb.setTextColor(C_DIM, C_BAR);
+    fb.drawString(why, 6 + fb.textWidth(net::viaName()) + 7, BAR_TOP / 2);
+  }
 
   if (timeValid) {
     char stamp[16];
