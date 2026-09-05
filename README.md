@@ -19,6 +19,10 @@ there as a fallback, not a requirement.
 | ![the panel's own vitals](docs/pages/4-vitals.png) | |
 | **vitals** — not a page: hold `IO14` for the panel's own | |
 
+The same readings are also [a web page](#the-panel-on-a-phone) for a phone on
+the desk beside it, off a small server you start by double-clicking and stop by
+closing its window.
+
 `IO14` moves to the next page, and held, brings up the panel's own vitals over
 whatever is showing. `BOOT` refreshes the page in front of you, and held, dims
 or brightens the panel — except on **pomo**, where there is nothing to fetch
@@ -405,6 +409,8 @@ launcher looks: if what holds the port is another copy of itself it says so and
 offers to stop it, and if it is anything else it names the process and leaves
 it alone. It asks first either way — a running server has a page open on the
 other end of it, and a pomodoro half way through a block.
+
+![the panel as a web page, on a phone held sideways](docs/web-panel.png)
 
 Run `tools/panel_web/install.sh` once first, from a shell that can read this
 repo. It is the wall the launch agent for `usage_server.py` hit, in a new
