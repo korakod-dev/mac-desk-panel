@@ -426,6 +426,7 @@ struct Usage {
   time_t   d7reset = 0;
   int      age     = -1;      // cache age in seconds, as reported at `fetched`
   bool     live    = false;   // the host asked the API for this one
+  String   liveErr;           // why the live reading stopped, "" while it works
   uint32_t fetched = 0;
   String   error;
 };
@@ -477,6 +478,7 @@ static bool fetchUsage(bool live) {
   usage.d7reset = doc["d7_reset"] | 0;
   usage.age     = doc["age"]      | -1;
   usage.live    = doc["live"]     | false;
+  usage.liveErr = doc["live_error"] | "";
 
   usage.valid   = usage.h5 >= 0 || usage.d7 >= 0;
   usage.fetched = millis();
@@ -2048,13 +2050,19 @@ static void pageUsage(time_t now, bool timeValid) {
   // stale. One the host went and asked for says so instead of counting the
   // seconds since — it is this page being open that makes it live, and it
   // stops being that the moment you leave.
+  //
+  // A live reading that has stopped is said in red ahead of the age: the files
+  // keep a number on screen, and without it nothing would show that the number
+  // has started to lag — "sign in" being the one that never mends on its own.
   int age = usageAgeNow();
   if (age >= 0) {
     String label = usage.live ? String("live")
                               : (age < 90 ? String(age) + "s ago"
                                           : String(age / 60) + "m ago");
+    bool broken = usage.liveErr.length() && !usage.live;
+    if (broken) label = usage.liveErr + " - " + label;   // no "·" in UiFont16
     fb.setTextDatum(MR_DATUM);
-    fb.setTextColor(age > 900 ? C_WARM : C_DIM, C_BG);
+    fb.setTextColor(broken ? C_ERR : age > 900 ? C_WARM : C_DIM, C_BG);
     fb.drawString(label, SCR_W - 8, BODY_TOP + 10);
   }
 

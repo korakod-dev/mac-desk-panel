@@ -24,7 +24,12 @@ see "the live reading" for why it is here and what it costs.
 
     GET /usage  ->  {"h5": 55, "h5_reset": 1786210200, "h5_stale": false,
                      "d7": 51, "d7_reset": 1786237200, "d7_stale": false,
-                     "age": 12, "live": false, "now": 1786213216}
+                     "age": 12, "live": false, "now": 1786213216,
+                     "live_error": ""}
+
+`live_error` is empty while the live reading works, and otherwise says why it
+stopped: "sign in" when the credential cannot be renewed and only signing in
+again with `claude` brings it back, "no live" for anything else.
 
 `age` is seconds since the cache was last written, so the panel can say when the
 reading stopped being live. A window whose reset time has already passed is
@@ -176,7 +181,21 @@ EXPIRY_MARGIN = 60      # renew this long before the stored token actually ends
 TOKEN_TTL = 300         # hold a read token this long before hitting the store
 
 _live_lock = threading.Lock()
-_live = {"reading": None, "at": 0, "next_try": 0, "error": ""}
+_live = {"reading": None, "at": 0, "next_try": 0, "error": "", "why": ""}
+
+# What the panel is told when the live reading has stopped, short enough to sit
+# in the corner of its page. Only one of them asks anything of you, so that one
+# is told apart from the rest: a credential that cannot be renewed stays dead
+# until someone signs in again, where a dropped network comes back on its own.
+SIGN_IN_SIGNS = ("refresh token expired", "renewal refused",
+                 "no Claude Code credential", "carries no refresh token",
+                 "token is scoped", "carries no access token", "HTTP 401")
+
+
+def live_why(exc):
+    """`exc` as the panel's one or two words: "sign in" or "no live"."""
+    text = str(exc)
+    return "sign in" if any(sign in text for sign in SIGN_IN_SIGNS) else "no live"
 _token = {"value": None, "read_at": 0, "expires": 0, "renew": False, "spent": ""}
 _refresh = {"next_try": 0}
 
@@ -490,6 +509,10 @@ def live_reading(now, ask):
             # says nothing about the token, so that one keeps it.
             if not limited:
                 _token["value"] = None
+            # Standing back says nothing new about why, so it keeps the reason
+            # that made it stand back rather than blurring "sign in" away.
+            if "standing back" not in str(exc) or not _live["why"]:
+                _live["why"] = live_why(exc)
             # Only when it changes: this is asked for every 30s while the page
             # is up, and one broken token would otherwise fill the log.
             if str(exc) != _live["error"]:
@@ -500,7 +523,7 @@ def live_reading(now, ask):
 
         if _live["error"]:
             print("live reading working again", flush=True)
-        _live.update(reading=reading, at=now, next_try=0, error="")
+        _live.update(reading=reading, at=now, next_try=0, error="", why="")
         return dict(reading, age=0)
 
 
@@ -536,11 +559,13 @@ def read_usage(live=False):
         "h5": -1, "h5_reset": 0, "h5_stale": False,
         "d7": -1, "d7_reset": 0, "d7_stale": False,
         "age": -1, "live": False, "now": now,
+        "live_error": "",
     }
 
     primary = parse_cache(CACHE, now)
     desktop = parse_cache(DESKTOP_CACHE, now)
     fresh = live_reading(now, live)
+    out["live_error"] = _live["why"]
 
     chosen, other = primary, desktop
     if desktop is not None and (primary is None or desktop["age"] < primary["age"]):

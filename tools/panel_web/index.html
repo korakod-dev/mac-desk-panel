@@ -193,6 +193,7 @@
     color: var(--dim);
   }
   .note.stale { color: var(--warn); }
+  .note.broken { color: var(--err); }
 
   /* --- clock -------------------------------------------------------------- */
 
@@ -773,7 +774,10 @@ function drawUsage(u, now) {
                    : age < 0 ? ''
                    : age < 90 ? `${age}s ago`
                               : `${Math.floor(age / 60)}m ago`;
-  note.className = 'note' + (age > 900 ? ' stale' : '');
+  // A live reading that has stopped is said ahead of the age, in red.
+  const broken = !u.live && u.live_error;
+  if (broken) note.textContent = `${u.live_error} · ${note.textContent}`;
+  note.className = 'note' + (broken ? ' broken' : age > 900 ? ' stale' : '');
 
   const window_ = (tag, tint, pct, reset) => {
     if (!(pct >= 0)) {
